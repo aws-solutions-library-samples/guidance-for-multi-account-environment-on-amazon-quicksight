@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Cloudformation template to build assets to used in the QuickSight multi-account Solution. In particular the assets present on the environments account
+         
+Parameters:  
+  DeploymentAccountId:
+    Description: Account ID used for the deploymment pipelines
+    Type: String    
+    AllowedPattern: "^[0-9]{12}"
+  DeploymentS3Bucket:
+    Description: S3 Bucket to use for pipeline assets
+    Type: String
+    AllowedPattern: "^[0-9a-z\\.-]{3,63}"    
+  AssumeRoleExtId:
+    Description: Ext ID to be used in when assuming the IAM role in the development account
+    Type: String    
+  QuickSightRegion:
+    Description: Region where QuickSight assets are hosted
+    Type: String   
+  DeploymentS3Region:
+    Description: Region where the deployment (CI/CD) bucket resides
+    Type: String    
+  SourceQSUser:
+    Description: Source stage username to use to retrieve QS assets
+    Type: String    
+  DestQSUser:
+    Description: Dest stage username to use to share the created QS assets with
+    Type: String    
+  SourceCodeS3Bucket:
+    Description: S3 Bucket containing the code
+    Type: String
+    AllowedPattern: "^[0-9a-z\\.-]{3,63}"    
+  SourceCodeKey:
+    Description: Key within S3 Bucket that contains the zipped code
+    Type: String
+    AllowedPattern: "^[0-9a-zA-Z\\/\\-_]+\\.zip"    
+  LayerCodeKey:
+    Description: Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries
+    Type: String
+    AllowedPattern: "^[0-9a-zA-Z\\/\\-_]+\\.zip"    
+  StageNames:
+    Description: List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)
+    Type: String
+    Default: "DEV, PRE, PRO"
+    
+
+Resources: 
+
+  lambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - QSlambdaExecRole
+      - lambdaLayer
+    Properties:
+      Description: >
+        Lambda function that describe resources in a source account and synthesizes a CFN template that is zipped and stored in the deployment account so 
+        codepipeline can take them as input and deploy it across the envs (DEV, PRE, PRO)
+      FunctionName: QSAssetsCFNSynthesizer
+      Handler: createTemplateFromAnalysis.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt QSlambdaExecRole.Arn
+      Runtime: python3.9
+      ReservedConcurrentExecutions: 5
+      Timeout: 300
+      Layers:
+        - !Ref lambdaLayer
+      Environment:
+        Variables:
+          SOURCE_AWS_ACCOUNT_ID: 
+            !Ref AWS::AccountId
+          DEPLOYMENT_ACCOUNT_ID:
+            !Ref DeploymentAccountId
+          DEPLOYMENT_S3_BUCKET:
+            !Ref DeploymentS3Bucket
+          ASSUME_ROLE_EXT_ID:
+            !Ref AssumeRoleExtId
+          DEPLOYMENT_S3_REGION:
+            !Ref DeploymentS3Region
+          SOURCE_QS_USER:
+            !Ref SourceQSUser          
+          DEST_QS_USER:
+            !Ref DestQSUser
+          STAGES_NAMES:   
+            !Ref StageNames
+      Code:
+        S3Bucket: !Ref SourceCodeS3Bucket
+        S3Key: !Ref SourceCodeKey
+        
+        
+      
+  QSlambdaExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AWSLambdaExecute
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      Policies:
+        - 
+         PolicyName: "QSAccessPolicyForLambdaCFNSynthesizer"
+         PolicyDocument:
+           Version: "2012-10-17"
+           Statement:
+            - Action: quicksight:DescribeDataSet
+              Effect: Allow
+              Resource: 
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dataset/*" ]]
+              Sid: 1
+            - Action:
+              - quicksight:DescribeAnalysis
+              - quicksight:DescribeDataSource
+              - quicksight:DescribeRefreshSchedule
+              - quicksight:DescribeDashboard              
+              Effect: Allow
+              Resource:
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":analysis/*"]]
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dataset/*/refresh-schedule/*"]]
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":datasource/*"]]
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dashboard/*"]]
+              Sid: 2
+            - Action: quicksight:ListRefreshSchedules
+              Effect: Allow
+              Resource: '*'
+              Sid: 3
+            - Action: sts:AssumeRole
+              Effect: Allow
+              Resource: 
+                - !Join ["", ["arn:aws:iam::", !Ref DeploymentAccountId, ":role/DevAccountS3AccessRole"]]
+              Sid: 4
+            - Action: quicksight:DescribeAnalysisPermissions
+              Effect: Allow
+              Resource: 
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":analysis/*"]]
+              Sid: 5
+  lambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties: 
+      CompatibleArchitectures: 
+        - x86_64
+      CompatibleRuntimes: 
+        - python3.9
+      Content: 
+        S3Bucket: !Ref SourceCodeS3Bucket
+        S3Key: !Ref LayerCodeKey  
+      Description: Layer containing up to date boto3 package and PyYAML needed by QSAssetsCFNSynthesizer function
+      LayerName: QSAssetsCFNSynthesizer
+      
+Outputs:
+  LambdaFunction:
+    Description: Link to console for the lambda function in charge of synthesizing the assets that will be used by the CI/CD pipeline
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/lambda/home?region=${AWS::Region}#/functions/${lambdaFunction}?tab=code
+  

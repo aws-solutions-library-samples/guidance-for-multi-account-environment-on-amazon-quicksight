@@ -1,0 +1,18 @@
+Type: AWS::QuickSight::DataSource
+Properties:
+  DataSourceId: '<fill_me>'
+  AwsAccountId: 
+    Ref: 'AWS::AccountId'
+  Name: '<fill_me>'
+  Type: S3
+  DataSourceParameters:
+  Permissions:
+    - Principal: 
+        Fn::Sub: 'arn:aws:quicksight:${DstQSAdminRegion}:${AWS::AccountId}:user/default/${QSUser}'          
+      Actions:
+        - quicksight:UpdateDataSourcePermissions
+        - quicksight:DescribeDataSource
+        - quicksight:DescribeDataSourcePermissions
+        - quicksight:PassDataSource
+        - quicksight:UpdateDataSource
+        - quicksight:DeleteDataSource

@@ -1,0 +1,133 @@
+Type: AWS::QuickSight::DataSet
+Properties:
+  DataSetId: '<fill_me>'
+  Name: '<fill_me>'
+  AwsAccountId: 
+    Ref: 'AWS::AccountId'
+  ImportMode: '<fill_me>'
+  PhysicalTableMap:
+      PhysicalTable1:
+        S3Source:
+          DataSourceArn: '<fill_me>'
+          InputColumns:
+          - Name: ColumnId-1
+            Type: STRING
+          - Name: ColumnId-2
+            Type: STRING
+          - Name: ColumnId-3
+            Type: STRING
+          - Name: ColumnId-4
+            Type: STRING
+          - Name: ColumnId-5
+            Type: STRING
+          - Name: ColumnId-6
+            Type: STRING
+          - Name: ColumnId-7
+            Type: STRING
+          - Name: ColumnId-8
+            Type: STRING
+          - Name: ColumnId-9
+            Type: STRING
+          - Name: ColumnId-10
+            Type: STRING
+          - Name: ColumnId-11
+            Type: STRING
+          - Name: ColumnId-12
+            Type: STRING
+          UploadSettings:
+            ContainsHeader: true
+            Delimiter: ','
+            Format: CSV
+            StartFromRow: 1
+            TextQualifier: DOUBLE_QUOTE
+  LogicalTableMap:
+      LogicalTable1:
+        Alias: QSTCF-DataSet
+        DataTransforms:
+        - RenameColumnOperation:
+            ColumnName: ColumnId-1
+            NewColumnName: Date
+        - CastColumnTypeOperation:
+            ColumnName: Date
+            Format: M/d/yyyy
+            NewColumnType: DATETIME
+        - RenameColumnOperation:
+            ColumnName: ColumnId-2
+            NewColumnName: Salesperson
+        - RenameColumnOperation:
+            ColumnName: ColumnId-3
+            NewColumnName: Lead Name
+        - RenameColumnOperation:
+            ColumnName: ColumnId-4
+            NewColumnName: Segment
+        - RenameColumnOperation:
+            ColumnName: ColumnId-5
+            NewColumnName: Region
+        - RenameColumnOperation:
+            ColumnName: ColumnId-6
+            NewColumnName: Target Close
+        - CastColumnTypeOperation:
+            ColumnName: Target Close
+            Format: M/d/yyyy
+            NewColumnType: DATETIME
+        - RenameColumnOperation:
+            ColumnName: ColumnId-7
+            NewColumnName: Forecasted Monthly Revenue
+        - CastColumnTypeOperation:
+            ColumnName: Forecasted Monthly Revenue
+            NewColumnType: INTEGER
+        - RenameColumnOperation:
+            ColumnName: ColumnId-8
+            NewColumnName: Opportunity Stage
+        - RenameColumnOperation:
+            ColumnName: ColumnId-9
+            NewColumnName: Weighted Revenue
+        - CastColumnTypeOperation:
+            ColumnName: Weighted Revenue
+            NewColumnType: INTEGER
+        - RenameColumnOperation:
+            ColumnName: ColumnId-10
+            NewColumnName: Is Closed
+        - RenameColumnOperation:
+            ColumnName: ColumnId-11
+            NewColumnName: ActiveItem
+        - RenameColumnOperation:
+            ColumnName: ColumnId-12
+            NewColumnName: IsLatest
+        - CastColumnTypeOperation:
+            ColumnName: IsLatest
+            NewColumnType: INTEGER
+        - TagColumnOperation:
+            ColumnName: Region
+            Tags:
+            - ColumnGeographicRole: STATE
+        - ProjectOperation:
+            ProjectedColumns:
+            - Date
+            - Salesperson
+            - Lead Name
+            - Segment
+            - Region
+            - Target Close
+            - Forecasted Monthly Revenue
+            - Opportunity Stage
+            - Weighted Revenue
+            - Is Closed
+            - ActiveItem
+            - IsLatest
+        Source:
+          PhysicalTableId: PhysicalTable1
+  Permissions:
+      - Principal: 
+          Fn::Sub: 'arn:aws:quicksight:${DstQSAdminRegion}:${AWS::AccountId}:user/default/${QSUser}'            
+        Actions:
+          - quicksight:UpdateDataSetPermissions
+          - quicksight:DescribeDataSet
+          - quicksight:DescribeDataSetPermissions
+          - quicksight:PassDataSet
+          - quicksight:DescribeIngestion
+          - quicksight:ListIngestions
+          - quicksight:UpdateDataSet
+          - quicksight:DeleteDataSet
+          - quicksight:CreateIngestion
+          - quicksight:CancelIngestion      

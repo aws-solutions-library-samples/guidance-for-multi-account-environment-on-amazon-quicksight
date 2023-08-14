@@ -1,0 +1,24 @@
+Type: AWS::QuickSight::Analysis
+Properties: 
+  AnalysisId: String
+  AwsAccountId: 
+    Ref: 'AWS::AccountId'
+  Name: String
+  SourceEntity: 
+    SourceTemplate: 
+      Arn: 
+        Fn::Sub: 'arn:aws:quicksight:${AWS::Region}:{SourceAccountID}:template/{template_id}'
+      DataSetReferences: 
+      - DataSetArn: String
+        DataSetPlaceholder: String
+  Permissions:
+      - Actions:
+        - quicksight:RestoreAnalysis
+        - quicksight:UpdateAnalysisPermissions
+        - quicksight:DeleteAnalysis
+        - quicksight:DescribeAnalysisPermissions
+        - quicksight:QueryAnalysis
+        - quicksight:DescribeAnalysis
+        - quicksight:UpdateAnalysis
+        Principal: 
+          Fn::Sub: 'arn:aws:quicksight:${DstQSAdminRegion}:${AWS::AccountId}:user/default/${QSUser}'

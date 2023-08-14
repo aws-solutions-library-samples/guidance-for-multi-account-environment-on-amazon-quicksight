@@ -1,0 +1,16 @@
+Type: AWS::QuickSight::RefreshSchedule
+Properties: 
+  AwsAccountId: String
+  DataSetId: String
+  Schedule: 
+    RefreshType: String
+    ScheduleFrequency: 
+      Interval: String
+      RefreshOnDay: 
+        DayOfMonth: String
+        DayOfWeek: String
+      TimeOfTheDay: String
+      TimeZone: String
+    ScheduleId: String
+    StartAfterDateTime: String
+  

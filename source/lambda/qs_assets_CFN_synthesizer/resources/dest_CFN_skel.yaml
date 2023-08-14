@@ -1,0 +1,16 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Automated deployment of QuickSight Assets.'
+
+Parameters:
+  SourceAccountID:
+    Description: Account ID where the QuickSight template resides (source account)
+    Type: String
+  QSUser:
+    Description: QS Username in Account where the assets will be created
+    Type: String
+  DstQSAdminRegion:
+    Description: Admin region for your QS dest account where your users are hosted
+    Type: String
+  SrcQSRegion:
+    Description: QuickSight Region where the source assets (templates) are hosted
+    Type: String
