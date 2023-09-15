@@ -5,6 +5,7 @@ import copy
 from zipfile import ZipFile
 import os
 import boto3
+import botocore
 from botocore.exceptions import ClientError
 from helpers.datasets import QSDataSetDef
 from helpers.analysis import QSAnalysisDef
@@ -579,7 +580,7 @@ def generateRefreshSchedulesCFN(datasetObj: QSDataSetDef, appendContent: dict):
     return appendContent
 
 
-def zipAndUploadToS3(bucket: str, files: list, zip_name: str, prefix=None, object_name=None, region='us-east-1', credentials=None):
+def zipAndUploadToS3(bucket: str, files: list, zip_name: str, bucket_owner:str, prefix=None, object_name=None, region='us-east-1', credentials=None):
 
     """
     Helper function that zips a file and uploads a file to S3 in a particular bucket with a particular key (including a prefix)
@@ -589,6 +590,7 @@ def zipAndUploadToS3(bucket: str, files: list, zip_name: str, prefix=None, objec
     bucket(str): S3 bucket name
     files(list): Filename to be zipped and uploaded
     zip_name(str): Name of the zip file to be used when zipping the content
+    bucket_owner(str): Expected AWS account owning the bucket
     prefix(str): Prefix to be used in the S3 object name
     object_name(str): S3 object name
     region(str): AWS region where the bucket is located
@@ -609,9 +611,9 @@ def zipAndUploadToS3(bucket: str, files: list, zip_name: str, prefix=None, objec
             print('Adding file {file} to zip {zip_name}'.format(file=file, zip_name=zip_name))
             assetszip.write(file, arcname=os.path.basename(file))
     
-    return uploadFileToS3(bucket=bucket, filename=zip_name, prefix=prefix, object_name=object_name, region=region, credentials=credentials)
+    return uploadFileToS3(bucket=bucket, filename=zip_name, prefix=prefix, object_name=object_name, bucket_owner=bucket_owner, region=region, credentials=credentials)
 
-def uploadFileToS3(bucket: str, filename: str, region: str, prefix=None, object_name=None, credentials=None):
+def uploadFileToS3(bucket: str, filename: str, region: str, bucket_owner:str, prefix=None, object_name=None, credentials=None):
 
     """
     Helper function that uploads a file to S3 in a particular bucket with a particular key (including a prefix)
@@ -623,6 +625,7 @@ def uploadFileToS3(bucket: str, filename: str, region: str, prefix=None, object_
     prefix(str): Prefix to be used in the S3 object name
     object_name(str): S3 object name
     region(str): AWS region where the bucket is located
+    bucket_owner(str): Expected AWS account owning the bucket
     credentials(dict): AWS credentials to be used in the upload operation
 
     Returns:
@@ -639,6 +642,12 @@ def uploadFileToS3(bucket: str, filename: str, region: str, prefix=None, object_
             s3 = boto3.client('s3', region_name=region)     
     else:
         s3 = boto3.client('s3', region_name=region, aws_access_key_id=credentials['AccessKeyId'], aws_secret_access_key=credentials['SecretAccessKey'], aws_session_token=credentials['SessionToken'])
+
+    try:
+        s3.get_bucket_location(Bucket=bucket, ExpectedBucketOwner=bucket_owner)
+    except botocore.exceptions.ClientError as error:
+        print('The provided bucket doesn\'t belong to the expected account {account_id}'.format(account_id=bucket_owner))
+        return False
 
     # If S3 object_name was not specified, use zip_name
     if object_name is None:
@@ -788,7 +797,7 @@ def summarize_template(template_content: dict, templateName: str, s3Credentials:
     paramFilename = '{output_dir}/{template_name}_README.json'.format(output_dir=OUTPUT_DIR, template_name=templateName)
     
     writeToFile(content=parameters, filename=paramFilename, format="json")
-    uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=paramFilename, region=AWS_REGION, object_name='{template_name}_README.json'.format(template_name=templateName), prefix=conf_files_prefix, credentials=s3Credentials)
+    uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=paramFilename, region=AWS_REGION, object_name='{template_name}_README.json'.format(template_name=templateName), prefix=conf_files_prefix, bucket_owner=DEPLOYMENT_ACCOUNT_ID, credentials=s3Credentials)
 
     print(DIVIDER_SECTION)
     print("Template {template_name} contains parameters that need to be set in CodePipeline's CloudFormation artifact via file. This file has been uploaded to {file_location}, each development stage will have its own pair of parametrization files (source and dest).\
@@ -1044,9 +1053,9 @@ def lambda_handler(event, context):
             source_param_list = generate_cloudformation_template_parameters(template_content=source_account_yaml)
             dest_param_list = generate_cloudformation_template_parameters(template_content=dest_account_yaml)
             source_assets_param_file_path = writeToFile('{output_dir}/source_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=source_param_list, format='json')
-            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=source_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=source_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, bucket_owner=DEPLOYMENT_ACCOUNT_ID, credentials=credentials)
             dest_assets_param_file_path = writeToFile('{output_dir}/dest_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=dest_param_list, format='json')
-            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=dest_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=dest_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
 
         summarize_template(template_content=source_account_yaml, templateName="SourceAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
         summarize_template(template_content=dest_account_yaml, templateName="DestinationAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
@@ -1062,14 +1071,14 @@ def lambda_handler(event, context):
         source_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/source_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
         source_files.append(QSSourceAssetsFilename)
 
-        ret_source = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=source_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+        ret_source = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=source_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
 
         # Create dest artifact file
         zip_file = '{output_dir}/DEST_assets_CFN.zip'.format(output_dir=OUTPUT_DIR)
         
         dest_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/dest_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
         dest_files.append(QSDestAssetsFilename)
-        ret_dest = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=dest_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+        ret_dest = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=dest_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
 
 
     return {

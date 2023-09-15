@@ -89,7 +89,7 @@ To deploy with CodePipeline in the first stage (typically Pre) [StackSets will b
 
 ![](assets/Reference-architecture-diagram.png)
 
-## Deployment instructions
+## Deploying the solution
 
 Solution assets will need to be deployed in two of the accounts, the first account that will be used in the CI/CD pipeline (typically this would be the development account) that will synthesize the QuickSight assets and the deployment account that will implement the CI/CD pipeline.
 
@@ -119,6 +119,7 @@ The deployment of these assets can be done by just deploying the deploymentAccou
 |QuickSightRegion|Region where QuickSight assets are hosted|String|
 |SrcQSAdminRegion|Admin region for your QS source account where your users are hosted|String|
 |DestQSAdminRegion|Admin region for your QS destination account where your users are hosted|String|
+|AccountAdmin|IAM Username that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption)|String|
 |QSUser|QS Username in Account where the assets will be created|String|
 |Stage1Name|Name of the first stage in the pipeline, e.g. DEV|String|
 |Stage2Name|Name of the first stage in the pipeline, e.g. PRE|String|

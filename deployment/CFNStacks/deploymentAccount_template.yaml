@@ -36,7 +36,10 @@ Parameters:
     Type: String    
   QSUser:
     Description: QS Username in Account where the assets will be created
-    Type: String    
+    Type: String
+  AccountAdmin:
+    Description: IAM Username that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption)
+    Type: String
   Stage1Name:
     Description: Name of the first stage in the pipeline, e.g. DEV
     Type: String    
@@ -80,6 +83,11 @@ Resources:
         IgnorePublicAcls: true
         BlockPublicPolicy: true
         RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            Status: Enabled
       VersioningConfiguration: 
         Status: Enabled
       NotificationConfiguration: 
@@ -89,9 +97,66 @@ Resources:
     Type: AWS::SNS::Topic
     Properties:
       DisplayName: !Sub ${PipelineName}-Topic
+      KmsMasterKeyId: !Ref snsEncriptionKey
       Subscription: 
         - Endpoint: !Ref ApprovalEmail
-          Protocol: email       
+          Protocol: email  
+  snsEncriptionKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: !Sub KMS key used to encript content of messages delivered to QS ${PipelineName} CI/CD pipeline
+      Enabled: True
+      EnableKeyRotation: True
+      KeyPolicy: 
+        Version: '2012-10-17'
+        Id: allow-sns
+        Statement:
+        - Sid: Allow access through SNS for all principals in the account that are authorized to use SNS
+          Action:
+          - kms:Decrypt
+          - kms:GenerateDataKey*
+          - kms:CreateGrant
+          - kms:ListGrants
+          - kms:DescribeKey
+          Condition:
+            StringEquals:
+              kms:CallerAccount: !Ref AWS::AccountId 
+              kms:ViaService: sns.us-east-1.amazonaws.com
+          Effect: Allow
+          Principal:
+            AWS: '*'
+          Resource: '*'
+        - Sid: Allow administration of the key
+          Effect: Allow
+          Action:
+          - kms:Create*
+          - kms:Describe*
+          - kms:Enable*
+          - kms:List*
+          - kms:Put*
+          - kms:Update*
+          - kms:Revoke*
+          - kms:Disable*
+          - kms:Get*
+          - kms:Delete*
+          - kms:ScheduleKeyDeletion
+          - kms:CancelKeyDeletion            
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:${AccountAdmin}
+          Resource: '*'
+        - Sid: Allow direct access to key metadata to the account
+          Action:
+          - kms:Describe*
+          - kms:Get*
+          - kms:List*
+          - kms:RevokeGrant
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Resource: '*'          
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT 
+
   codepipeline:
     Type: AWS::CodePipeline::Pipeline
     DependsOn:       
@@ -364,6 +429,7 @@ Resources:
               - s3:PutObjectAcl
               - s3:GetObject
               - s3:GetObjectAcl
+              - s3:GetBucketLocation
               Effect: Allow
               Resource:
               - !Sub "arn:aws:s3:::${pipelineS3Bucket}"

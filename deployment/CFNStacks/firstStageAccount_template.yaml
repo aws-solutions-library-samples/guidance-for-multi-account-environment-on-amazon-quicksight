@@ -58,7 +58,7 @@ Resources:
       Handler: createTemplateFromAnalysis.lambda_handler
       MemorySize: 128
       Role: !GetAtt QSlambdaExecRole.Arn
-      Runtime: python3.9
+      Runtime: python3.11
       ReservedConcurrentExecutions: 5
       Timeout: 300
       Layers:
