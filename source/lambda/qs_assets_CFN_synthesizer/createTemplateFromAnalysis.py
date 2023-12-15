@@ -1,11 +1,12 @@
 import logging
 import yaml
 import json
+import os
+import time
 import copy
 from zipfile import ZipFile
 import os
 import boto3
-import botocore
 from botocore.exceptions import ClientError
 from helpers.datasets import QSDataSetDef
 from helpers.analysis import QSAnalysisDef
@@ -13,6 +14,7 @@ from helpers.datasources import SourceType, QSDataSourceDef, QSServiceDatasource
 from helpers.datasets import ImportMode
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from urllib.request import urlretrieve
 
 now = datetime.now()
 
@@ -24,10 +26,15 @@ DEPLOYMENT_S3_BUCKET = os.environ['DEPLOYMENT_S3_BUCKET']
 DEPLOYMENT_S3_REGION = os.environ['DEPLOYMENT_S3_REGION']
 ASSUME_ROLE_EXT_ID = os.environ['ASSUME_ROLE_EXT_ID']
 ANALYSIS_ID = ''
-DASHBOARD_ID = ''
+DASHBOARD_ID = os.environ['DASHBOARD_ID']
 SOURCE_QS_USER = os.environ['SOURCE_QS_USER']
 DEST_QS_USER = os.environ['DEST_QS_USER']
 STAGES_NAMES = os.environ['STAGES_NAMES']
+REPLICATION_METHOD = os.environ['REPLICATION_METHOD']
+REMAP_DS = os.environ['REMAP_DS']
+PIPELINE_NAME = os.environ['PIPELINE_NAME'] if 'PIPELINE_NAME' in os.environ else ''
+MODE = os.environ['MODE'] if 'MODE' in os.environ else 'INITIALIZE'
+
 
 DEPLOYMENT_DEV_ACCOUNT_ROLE_ARN = 'arn:aws:iam::{deployment_account_id}:role/DevAccountS3AccessRole'.format(deployment_account_id=DEPLOYMENT_ACCOUNT_ID)
 OUTPUT_DIR = '/tmp/output/'
@@ -42,14 +49,12 @@ except FileExistsError:
 qs = boto3.client('quicksight', region_name=AWS_REGION)
 
 
-def generateQSTemplateCFN(analysisName: str, datasetDict: dict, analysisArn: str):
+def generateQSTemplateCFN(analysisDefObj:QSAnalysisDef):
     """Function that generates a Cloudformation AWS::QuickSight::Template resource https://a.co/7A8bfh7
     synthesized from a given analysisName
 
     Parameters:
-    analysisName (str): Analysis name that will be templated
-    datasetDict (dict): Dictionary of dataset names and placeholders
-    analysisArn (str): Analysis ARN of the analysis that will be templated
+    analysisDefObj (QSAnalysisDef): Analysis name that will be templated   
 
     
     Returns:
@@ -61,50 +66,107 @@ def generateQSTemplateCFN(analysisName: str, datasetDict: dict, analysisArn: str
 
     """
    
+    TEMPLATE_VERSION = 'QS_CI_CD_TEMPLATE_{suffix}'.format(suffix=now.strftime('%d-%m-%y-%H-%M-%S'))
+
     with open('resources/template_CFN_skel.yaml', 'r') as file:
         yaml_template = yaml.safe_load(file)
 
     template_properties = yaml_template['Resources']['CICDQSTemplate']['Properties']
-    analysis_name_sanitized = analysisName.replace(' ', '-')
+    analysis_name_sanitized = analysisDefObj.name.replace(' ', '-')
     templateId = '{analysis_name}-template'.format(analysis_name=analysis_name_sanitized)
-    analysis_id = analysisArn.split('/')[-1]
+    analysis_id = analysisDefObj.id
 
     # properties in template
 
 
     template_properties['SourceEntity']['SourceAnalysis']['Arn']['Fn::Sub'] = template_properties['SourceEntity']['SourceAnalysis']['Arn']['Fn::Sub'].replace('{analysis_id}', analysis_id)
     template_properties['TemplateId'] = templateId
-    template_properties['Name'] = 'CI CD Template for analysis {name}'.format(name=analysisName)    
+    template_properties['Name'] = 'CI CD Template for analysis {name}'.format(name=analysisDefObj.name)
+    template_properties['VersionDescription'] = TEMPLATE_VERSION
 
     # set up dataset references
 
 
     dataset_ref_list = []
 
-    for datasetId in datasetDict:
-        dataset = {}   
-        datasetArnSubStr = 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/{dataset_id}'.replace('{dataset_id}', datasetId)
-
+    for datasetObj in analysisDefObj.datasets:
+        if datasetObj.isRLS:
+            # It is a RLS dataset no need to include it on template
+            continue
+        dataset = {}
+        datasetArnSubStr = 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/{dataset_id}'.replace('{dataset_id}', datasetObj.id)
         dataset['DataSetArn'] = {}
-        dataset['DataSetArn']['Fn::Sub'] = datasetArnSubStr        
-        dataset['DataSetPlaceholder'] = datasetDict[datasetId].placeholdername
+        dataset['DataSetArn']['Fn::Sub'] = datasetArnSubStr
+        dataset['DataSetPlaceholder'] = datasetObj.placeholdername
         dataset_ref_list.append(dataset)
 
     template_properties['SourceEntity']['SourceAnalysis']['DataSetReferences'] = dataset_ref_list
 
     return yaml_template, templateId
+
+def generateDataSourceObject(datasourceId:str, datasourceIndex:int):
+    
+    QSSERVICE_DS = [SourceType.ATHENA.name, SourceType.S3.name]
+    RDMBS_DS = [SourceType.AURORA.name, SourceType.AURORA_POSTGRESQL.name,SourceType.MYSQL.name,SourceType.MARIADB.name,SourceType.ORACLE.name,SourceType.SQLSERVER.name, SourceType.REDSHIFT.name]
+    
+
+    dataSourceDefObj = {}
+    DSparameters ={}
+    ret = qs.describe_data_source(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DataSourceId=datasourceId)
+    dsType = ret['DataSource']['Type']
+    datasourceName = ret['DataSource']['Name']
+    datasourceArn = ret['DataSource']['Arn']
+    
+    if dsType in QSSERVICE_DS:
+
+        if dsType == SourceType.S3.name:
+            if 'DataSourceParameters' in ret['DataSource']:
+                DSparameters['Bucket'] = ret['DataSource']['DataSourceParameters']['S3Parameters']['ManifestFileLocation']['Bucket']
+                DSparameters['Key'] = ret['DataSource']['DataSourceParameters']['S3Parameters']['ManifestFileLocation']['Key']
+            else:
+                raise ValueError("Error in createTemplateFromAnalysis:generateDataSourceObject, S3 datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} has no DataSourceParameters. S3 datasources need to use a manifest file stored in S3). Cannot proceed further. Consider using REMAP_DS: ''TRUE''".format(datasource_name=datasourceName, index=datasourceIndex, type=dsType, datasource_id=datasourceId))
         
-def generateDataSourceCFN(datasourceId: str, appendContent: dict, index: int, lambdaEvent: dict):
+        if dsType == SourceType.ATHENA.name:
+            DSparameters['WorkGroup'] = ret['DataSource']['DataSourceParameters']['AthenaParameters']['WorkGroup']
+        
+        dataSourceDefObj =  QSServiceDatasourceDef(name=datasourceName, arn=datasourceArn, parameters=DSparameters, type=SourceType[dsType], index=datasourceIndex)
+        
+    if dsType in RDMBS_DS:
+        if 'SecretArn' not in ret['DataSource']:
+            raise ValueError("Datasource {datasource_name} (ID {datasource_id}) is a {type} datasource and it is not configured with a secret, cannot proceed".format(type=dsType, datasource_name=datasourceName, datasource_id=datasourceId))
+        
+        DSparameters['SecretArn'] = ret['DataSource']['SecretArn']
+
+        if 'VpcConnectionProperties' in ret['DataSource']:
+            DSparameters['VpcConnectionArn'] = ret['DataSource']['VpcConnectionProperties']['VpcConnectionArn']
+
+        if 'RdsParameters' in ret['DataSource']['DataSourceParameters']:
+            #its an RDS datasource
+            DSparameters['InstanceId'] = ret['DataSource']['DataSourceParameters']['RdsParameters']['InstanceId']
+            DSparameters['Database'] = ret['DataSource']['DataSourceParameters']['RdsParameters']['Database']
+            DSparameters['Type'] = SourceType[dsType].name
+            dataSourceDefObj =  QSRDSDatasourceDef(name=datasourceName, arn=datasourceArn, parameters=DSparameters, type=SourceType[dsType],  index=datasourceIndex)
+        else:
+            datasourceParametersKey = list(ret['DataSource']['DataSourceParameters'].keys()).pop()
+            DSparameters['Host'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Host']
+            DSparameters['Port'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Port']
+            DSparameters['Database'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Database']
+            if dsType == SourceType.REDSHIFT.name:
+                DSparameters['ClusterId'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['ClusterId']
+            dataSourceDefObj =  QSRDBMSDatasourceDef(name=datasourceName, arn=datasourceArn, parameters=DSparameters, type=SourceType[dsType], index=datasourceIndex, dSourceParamKey=datasourceParametersKey)
+     
+    return dataSourceDefObj
+
+        
+def generateDataSourceCFN(datasourceDefObj: QSDataSourceDef, appendContent:dict, remap:bool):
     """
     Function that generates a Cloudformation AWS::QuickSight::DataSource resource https://a.co/2xRL70Q
     synthesized from the source environment account
 
     Parameters:
-    datasourceId (str): Datasource ID of the datasource that will be templated
-    appendContent (dict): Dictionary that represents the CFN template object (already built by other methods) where we want to append elements
-    index (int): Index of the datasource in the list of datasources that will be templated    
-    lambdaEvent (dict): Lambda event that contains optional parameters that alter the CFN resource that will be created, for example the REMAP_DS that, if provided \
-                        will generate a parametrized CFN template to replace datasource parameters
+    datasourceDefObj (QSDataSourceDef): Datasource definition object encapsulating info of the datasource to create
+    appendContent (dict): Dictionary that represents the CFN template object (already built by other methods) where we want to append elements    
+    remap (bool): Whether or not the datasource connection parameters (host, port, Athena workgroup ...) should be remapped
 
     
     Returns:
@@ -115,14 +177,11 @@ def generateDataSourceCFN(datasourceId: str, appendContent: dict, index: int, la
     """
 
     originalAppendContent = copy.deepcopy(appendContent)
-    updateTemplate=True
     
-
-    ret = qs.describe_data_source(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DataSourceId=datasourceId)
-    datasourceName = ret['DataSource']['Name']
+    datasourceName = datasourceDefObj.name
     properties = {}
-    RDMBS_DS = [SourceType.AURORA.name, SourceType.AURORA_POSTGRESQL.name,SourceType.MYSQL.name,SourceType.MARIADB.name,SourceType.ORACLE.name,SourceType.SQLSERVER.name, SourceType.REDSHIFT.name]
-    SECRET_ONLY_DS = RDMBS_DS + [SourceType.REDSHIFT.name]
+    RDMBS_DS = [SourceType.AURORA.name, SourceType.AURORA_POSTGRESQL.name,SourceType.MYSQL.name,SourceType.MARIADB.name,SourceType.ORACLE.name,SourceType.SQLSERVER.name, SourceType.REDSHIFT.name, SourceType.RDS.name]
+    
     
     if appendContent is None:
         print("Append content is None")
@@ -130,102 +189,87 @@ def generateDataSourceCFN(datasourceId: str, appendContent: dict, index: int, la
                 
     with open('resources/datasource_CFN_skel.yaml', 'r') as file:
         yaml_datasource = yaml.safe_load(file)        
-    id_sanitized = datasourceId.replace('-', '')
-    datasourceIdKey = 'DS{id}'.format(id=id_sanitized)
+    
+    datasourceIdKey = datasourceDefObj.CFNId
+    index = datasourceDefObj.index
     appendContent['Resources'][datasourceIdKey] = yaml_datasource
     properties = appendContent['Resources'][datasourceIdKey]['Properties']  
 
     if datasourceIdKey in originalAppendContent['Resources']:
         print('Datasource with CFNId {cfn_id} already exists, skipping'.format(cfn_id=datasourceIdKey)) 
-        updateTemplate=False    
+        return originalAppendContent
 
-    properties['DataSourceId'] = datasourceId    
-    properties['Name'] = datasourceName
+    properties['DataSourceId'] = datasourceDefObj.id    
+    properties['Name'] = datasourceDefObj.name
     
 
-    dsType = ret['DataSource']['Type']
-    DSparameters ={}
-    dataSourceDefObj = {}
-
-    print("Processing datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index}".format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType))
+    dsType = datasourceDefObj.type
     
-    if dsType == SourceType.S3.name:
-        destBucketKey = '{type}DestinationBucket{index}'.format(index=index, type=dsType)
-        destKeyKey = '{type}DestinationKey{index}'.format(index=index, type=dsType)
-        
-        if 'REMAP_DS' in lambdaEvent:
+    print("Processing datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index}".format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType))
+    
+    if dsType == SourceType.S3:
+        destBucketKey = '{type}DestinationBucket{index}'.format(index=index, type=dsType.name)
+        destKeyKey = '{type}DestinationKey{index}'.format(index=index, type=dsType.name)
+        templateS3Parameters = {
+                'S3Parameters': {
+                    'ManifestFileLocation': {}
+                }
+        } 
+        if remap:
             appendContent['Parameters'].update({
                 destBucketKey: {
-                    'Description' : 'S3 bucket to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                    'Description' : 'S3 bucket to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType),
                     'Type': 'String'
                 },
                 destKeyKey: {
-                    'Description' : 'S3 key to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                    'Description' : 'S3 key to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType),
                     'Type': 'String'
                 }
             })
-            DSparameters['Bucket'] = {
+            templateS3Parameters['S3Parameters']['ManifestFileLocation']['Bucket'] = {
                 'Ref': destBucketKey
             }
-            DSparameters['Key'] = {
+            templateS3Parameters['S3Parameters']['ManifestFileLocation']['Key'] = {
                 'Ref': destKeyKey
-            }            
-        else:
-            DSparameters['Bucket'] = ret['DataSource']['DataSourceParameters']['S3Parameters']['ManifestFileLocation']['Bucket']
-            DSparameters['Key'] = ret['DataSource']['DataSourceParameters']['S3Parameters']['ManifestFileLocation']['Key']
-
-        dataSourceDefObj =  QSServiceDatasourceDef(name=datasourceName, id=datasourceId, parameters=DSparameters, type=SourceType.S3, index=index)
-        properties['Type'] = 'S3'
-        templateS3Parameters = {
-            'S3Parameters': {
-                'ManifestFileLocation': {}
             }
-        }
-        templateS3Parameters['S3Parameters']['ManifestFileLocation']['Bucket'] = dataSourceDefObj.parameters['Bucket']
-        templateS3Parameters['S3Parameters']['ManifestFileLocation']['Key'] = dataSourceDefObj.parameters['Key']
+                    
+        else:              
+            templateS3Parameters['S3Parameters']['ManifestFileLocation']['Bucket'] = datasourceDefObj.parameters['Bucket']
+            templateS3Parameters['S3Parameters']['ManifestFileLocation']['Key'] = datasourceDefObj.parameters['Key']
+            
+        properties['Type'] = dsType.name
         properties['DataSourceParameters'] = templateS3Parameters
     
-    if dsType == SourceType.ATHENA.name:
-        if 'REMAP_DS' in lambdaEvent:
-            athenaWorkgroupKey = '{type}Workgroup{index}'.format(index=index, type=dsType)
-            appendContent['Parameters'].update({
-                athenaWorkgroupKey: {
-                    'Description' : 'Athena Workgroup to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
-                    'Type': 'String'
-                }
-            })
-            DSparameters['WorkGroup'] = {
-                'Ref': athenaWorkgroupKey
-            }
-        else:
-            DSparameters['WorkGroup'] = ret['DataSource']['DataSourceParameters']['AthenaParameters']['WorkGroup']
-        dataSourceDefObj =  QSServiceDatasourceDef(name=datasourceName, id=datasourceId, parameters=DSparameters, type=SourceType.ATHENA, index=index)
-        properties['Type'] = 'ATHENA'
+    if dsType == SourceType.ATHENA:
         templateAthenaParameters = {
             'AthenaParameters': {}
         }
-        templateAthenaParameters['AthenaParameters']['WorkGroup'] = dataSourceDefObj.parameters['WorkGroup']
-        properties['DataSourceParameters'] = templateAthenaParameters
-
-    if 'VpcConnectionProperties' in ret['DataSource']:
-        vpcConnectionArn = ret['DataSource']['VpcConnectionProperties']['VpcConnectionArn']
-        properties['VpcConnectionProperties'] = {
-            'VpcConnectionArn': {
-                'Ref': 'VpcConnectionArn'
-            }
-        }
-        appendContent['Parameters'].update({
-            'VpcConnectionArn':  {
-                    'Description' : 'VPC Connection Arn to use in the stage, to be parametrized via CFN',
+        if remap:
+            athenaWorkgroupKey = '{type}Workgroup{index}'.format(index=index, type=dsType.name)
+            appendContent['Parameters'].update({
+                athenaWorkgroupKey: {
+                    'Description' : 'Athena Workgroup to use for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                     'Type': 'String'
                 }
-        }
-        )
-
-    if dsType in SECRET_ONLY_DS:
-        if 'SecretArn' not in ret['DataSource']:
-            raise ValueError("Datasource {datasource_name} (ID {datasource_id}) is a {type} datasource and it is not configured with a secret, cannot proceed".format(type=dsType, datasource_name=datasourceName, datasource_id=datasourceId))
+            })
+            templateAthenaParameters['AthenaParameters']['WorkGroup'] = {
+                'Ref': athenaWorkgroupKey
+            }
+        else:
+            templateAthenaParameters = {
+                'AthenaParameters': {}
+            }
+            templateAthenaParameters['AthenaParameters']['WorkGroup'] = datasourceDefObj.parameters['WorkGroup']
         
+        properties['Type'] = dsType.name
+        properties['DataSourceParameters'] = templateAthenaParameters
+
+    
+        
+        
+        
+        
+    if dsType.name in RDMBS_DS:
         properties['Credentials'] = {
             'SecretArn':  {
                 'Ref': 'DSSecretArn'
@@ -237,110 +281,114 @@ def generateDataSourceCFN(datasourceId: str, appendContent: dict, index: int, la
                 'Type': 'String'                
             }
         })
-    if dsType in RDMBS_DS:
-        datasourceParametersKey = list(ret['DataSource']['DataSourceParameters'].keys()).pop()
-        if 'RdsParameters' in ret['DataSource']['DataSourceParameters']:
+        if datasourceDefObj.vpcConnectionArn != '':
+            properties['VpcConnectionProperties'] = {
+                'VpcConnectionArn': {
+                    'Ref': 'VpcConnectionArn'
+                }
+            }
+            appendContent['Parameters'].update({
+                'VpcConnectionArn':  {
+                        'Description' : 'VPC Connection Arn to use in the stage, to be parametrized via CFN',
+                        'Type': 'String'
+                    }
+            }
+            )
+
+        if isinstance(datasourceDefObj, QSRDSDatasourceDef):
             #its an RDS datasource
             rdsInstanceParam = 'RDSInstanceID{index}'.format(index=index)
             databaseParam = 'RDSDBName{index}'.format(index=index)
-            if 'REMAP_DS' in lambdaEvent:
+            templateDSParameters = {
+                'RdsParameters' : {
+                }
+            }
+            if remap:
                 appendContent['Parameters'].update({
                     rdsInstanceParam: {
-                        'Description' : 'RDS Instance Id for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'RDS Instance Id for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'String'
                     },
                     databaseParam: {
-                        'Description' : 'Database name for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'Database name for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'String'
                     }
                 })
-                DSparameters['InstanceId'] = {
+                templateDSParameters['RdsParameters']['InstanceId'] = {
                     'Ref': rdsInstanceParam
                 }
-                DSparameters['Database'] = {
+                templateDSParameters['RdsParameters']['Database'] = {
                     'Ref': databaseParam
                 }
 
             else:
-                DSparameters['InstanceId'] = ret['DataSource']['DataSourceParameters']['RdsParameters']['InstanceId']
-            dataSourceDefObj =  QSRDSDatasourceDef(name=datasourceName, id=datasourceId, parameters=DSparameters, vpcConnectionArn=vpcConnectionArn, index=index)
+                templateDSParameters['RdsParameters']['InstanceId'] = datasourceDefObj.instanceId
+                templateDSParameters['RdsParameters']['Database'] = datasourceDefObj.database
+        else:
+            #RDBMS connection
+            datasourceParametersKey = datasourceDefObj.dSourceParamKey
             templateDSParameters = {
                 datasourceParametersKey : {
-                    'Database': dataSourceDefObj.database,
-                    'InstanceId': dataSourceDefObj.instanceId
                 }
-            }            
-        else:
-            if 'REMAP_DS' in lambdaEvent:
-                
-                databaseParam = '{type}DBName{index}'.format(index=index, type=dsType)
-                portParam = '{type}Port{index}'.format(index=index, type=dsType)
-                hostParam = '{type}Host{index}'.format(index=index,type=dsType)
+            } 
+            if remap:
+                databaseParam = '{type}DBName{index}'.format(index=index, type=dsType.name)
+                portParam = '{type}Port{index}'.format(index=index, type=dsType.name)
+                hostParam = '{type}Host{index}'.format(index=index,type=dsType.name)
                 appendContent['Parameters'].update({             
                     databaseParam: {
-                        'Description' : 'Database name for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'Database name for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'String'
                     },
                     portParam: {
-                        'Description' : 'Database port for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'Database port for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'Number'
                     },
                     hostParam: {
-                        'Description' : 'Database host for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'Database host for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline. This parameter was added because REMAP_DS parameter was set in the synthesizer lambda'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'String'
                     }
                 })
                 
-                DSparameters['Database'] = {
+                templateDSParameters[datasourceParametersKey]['Database'] = {
                     'Ref': databaseParam
                 }    
-                DSparameters['Port'] = {
+                templateDSParameters[datasourceParametersKey]['Port'] = {
                     'Ref': portParam
                 }
-                DSparameters['Host'] = {
+                templateDSParameters[datasourceParametersKey]['Host'] = {
                     'Ref': hostParam
                 }        
             else:
-                DSparameters['Host'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Host']
-                DSparameters['Port'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Port']
-                DSparameters['Database'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['Database']            
-            templateDSParameters = {
-                datasourceParametersKey : {
-                    'Database': DSparameters['Database'],
-                    'Host': DSparameters['Host'],
-                    'Port': DSparameters['Port']
-                }
-            }  
+                templateDSParameters[datasourceParametersKey]['Host'] = datasourceDefObj.host
+                templateDSParameters[datasourceParametersKey]['Port'] = datasourceDefObj.port
+                templateDSParameters[datasourceParametersKey]['Database'] = datasourceDefObj.database
+             
         
-        if dsType == SourceType.REDSHIFT.name:
-            if 'REMAP_DS' in lambdaEvent:
-                RSclusterIdParam = '{type}ClusterId{index}'.format(index=index,type=dsType)
+        if dsType == SourceType.REDSHIFT:
+            if remap:
+                RSclusterIdParam = '{type}ClusterId{index}'.format(index=index,type=dsType.name)
                 appendContent['Parameters'].update({
                     RSclusterIdParam: {
-                        'Description' : 'ClusterId for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceId, type=dsType),
+                        'Description' : 'ClusterId for datasource {datasource_name} (ID {datasource_id}, type {type}) with index {index} to use in the stage, to be parametrized via CFN deploy action in codepipeline see https://a.co/2aOOOTA for more information about how to set it in Codepipeline'.format(datasource_name=datasourceName, index=index, datasource_id=datasourceDefObj.id, type=dsType.name),
                         'Type': 'String'
                     }
                 })
-                DSparameters['ClusterId'] = {
+                templateDSParameters[datasourceParametersKey]['ClusterId'] = {
                     'Ref': RSclusterIdParam
                 }
             else:
-                DSparameters['ClusterId'] = ret['DataSource']['DataSourceParameters'][datasourceParametersKey]['ClusterId']
+                templateDSParameters[datasourceParametersKey]['ClusterId'] = datasourceDefObj.clusterId
             
-            templateDSParameters[datasourceParametersKey]['ClusterId'] = DSparameters['ClusterId']
-            
-            
-        dataSourceDefObj =  QSRDBMSDatasourceDef(name=datasourceName, id=datasourceId, parameters=DSparameters, vpcConnectionArn=vpcConnectionArn, index=index)
-        properties['Type'] = dsType
+        properties['Type'] = dsType.name
         properties['DataSourceParameters'] = templateDSParameters
 
-    if updateTemplate:
-        return appendContent, dataSourceDefObj
-    else:
-        return originalAppendContent, dataSourceDefObj
+    
+    return appendContent
+    
 
 
-def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tableMap: object, appendContent: dict, datasourceOrd:int):
+def generateDataSetCFN(datasetObj: QSDataSetDef, datasourceObjs: QSDataSourceDef, tableMap: object, appendContent: dict):
     """
     Function that generates a Cloudformation AWS::QuickSight::DataSet resource https://a.co/5EVM6yD
     synthesized from the source environment account
@@ -351,12 +399,10 @@ def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tabl
     datasourceObjs(list): List of QSDataSourceDef objects
     tableMap (dict): Dictionary of table names and corresponding physical table names
     appendContent(dict): Dictionary that represents the CFN template object (already built by other methods) where we want to append elements
-    datasourceOrd(int): number of datasources that have been generated (used to build the parameters in cloudformation)
-
+    
     Returns:
 
-    appendContent(dict): Dictionary containing the definition of Cloudformation template elements
-    datasourceOrd(int): number of datasources that have been generated (used to build the parameters in cloudformation)    
+    appendContent(dict): Dictionary containing the definition of Cloudformation template elements    
 
     Examples:
 
@@ -366,7 +412,7 @@ def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tabl
     
     OPTIONAL_PROPS = ['ColumnGroups', 'FieldFolders', 'RowLevelPermissionTagConfiguration', 'ColumnLevelPermissionRules', 'DataSetUsageConfiguration', 'DatasetParameters']
     
-    dependingDSources = []
+    dependingResources = []
     datasetId = datasetObj.id
     ret = qs.describe_data_set(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DataSetId=datasetId)
 
@@ -395,7 +441,7 @@ def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tabl
     properties['ImportMode'] = datasetObj.importMode.name  
     
     for datasourceObj in datasourceObjs:
-        dependingDSources.append(datasourceObj.CFNId)
+        dependingResources.append(datasourceObj.CFNId)
 
     for table in tableMap:
         # Dynamically get the child key of PhysicalTableMap's table that could be either RelationalTable, CustomSql, S3Source as per https://shorturl.at/uP124
@@ -408,7 +454,7 @@ def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tabl
         properties['PhysicalTableMap'][table][physicalTableKey]['DataSourceArn'] = datasourceArnSubStr
 
     appendContent['Resources'][dataSetIdKey] = yaml_dataset
-    appendContent['Resources'][dataSetIdKey]['DependsOn'] = dependingDSources
+    
 
     appendContent = generateRefreshSchedulesCFN(datasetObj=datasetObj, appendContent=appendContent)
 
@@ -416,14 +462,20 @@ def generateDataSetCFN(datasetObj: object, datasourceObjs: QSDataSourceDef, tabl
         if property in ret['DataSet'] and bool(ret['DataSet'][property]):
             properties[property] = ret['DataSet'][property]        
 
-    if 'RowLevelPermissionDataSet' in ret['DataSet'] and bool(ret['DataSet']['RowLevelPermissionDataSet']):
-        # Dataset contains row level permission, we need to create depending resources        
-        appendContent, datasourceOrd = generateRowLevelPermissionDataSetCFN(appendContent=appendContent, targetDatasetIdKey=dataSetIdKey, rlsDatasetDef=ret['DataSet']['RowLevelPermissionDataSet'], datasourceOrd=datasourceOrd)
-        
+    if datasetObj.rlsDSetDef is not None:
+        #This dataset contains a RLS dataset, so we need to update properties and dependencies in template accordingly
+        rlsDSetId = datasetObj.rlsDSetDef['Arn'].split('dataset/')[-1]
+        dependingResources.append('DSet{id}'.format(id=rlsDSetId.replace('-', '')))        
+        datasetObj.rlsDSetDef['Arn'] = {
+            'Fn::Sub': 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/${datasetId}'.replace('${datasetId}', rlsDSetId)
+        }
+        appendContent['Resources'][dataSetIdKey]['Properties']['RowLevelPermissionDataSet'] = datasetObj.rlsDSetDef
 
-    return appendContent, datasourceOrd
+    appendContent['Resources'][dataSetIdKey]['DependsOn'] = dependingResources
 
-def generateRowLevelPermissionDataSetCFN( appendContent:dict, targetDatasetIdKey:str, rlsDatasetDef:dict, datasourceOrd:int):
+    return appendContent
+
+def generateRowLevelPermissionDataSetCFN( appendContent:dict, targetDatasetIdKey:str, rlsDatasetDef:dict, datasourceOrd:int, lambdaEvent: object):
     """ Helper function that generates the dataset and datasource used to implement the RLS of a source dataset
 
     Args:        
@@ -431,6 +483,8 @@ def generateRowLevelPermissionDataSetCFN( appendContent:dict, targetDatasetIdKey
         targetDatasetIdKey (str): Dataset CFNId this RLS applies to
         rlsDatasetDef (dict): Object defining the RLS dataset to be appplied to the target dataset
         datasourceOrd(int): number of datasources that have been generated (used to build the parameters in cloudformation)
+        lambdaEvent (dict): Lambda event that contains optional parameters that alter the CFN resource that will be created, for example the REMAP_DS that, if provided \
+                        will generate a parametrized CFN template to replace datasource parameters
 
 
     Returns:
@@ -453,11 +507,11 @@ def generateRowLevelPermissionDataSetCFN( appendContent:dict, targetDatasetIdKey
     tableChildKey = list(retRLSDSet['DataSet']['PhysicalTableMap'][tableKey].keys()).pop()
     rlsDatasourceArn = retRLSDSet['DataSet']['PhysicalTableMap'][tableKey][tableChildKey]['DataSourceArn'] 
     rlsDatasourceId = rlsDatasourceArn.split('/')[-1]    
-    appendContent, RLSdataSourceDefObj = generateDataSourceCFN(datasourceId=rlsDatasourceId, appendContent=appendContent, index=datasourceOrd, lambdaEvent={'REMAP_DS':True})
+    appendContent, RLSdataSourceDefObj = generateDataSourceCFN(datasourceId=rlsDatasourceId, appendContent=appendContent, index=datasourceOrd, lambdaEvent=lambdaEvent)
     physicalTableKeys= get_physical_table_map_object(retRLSDSet['DataSet']['PhysicalTableMap'])
     RLSdatasetObj = QSDataSetDef(id=rlsDatasetId, name=retRLSDSet['DataSet']['Name'], importMode=importMode,physicalTableMap=physicalTableKeys, placeholdername=retRLSDSet['DataSet']['Name'], refreshSchedules=ret_refresh_schedules)
     RLSdatasetObj.dependingDSources = [RLSdataSourceDefObj]
-    appendContent, datasourceOrd = generateDataSetCFN(datasetObj=RLSdatasetObj, datasourceObjs=RLSdatasetObj.dependingDSources, tableMap=RLSdatasetObj.physicalTableMap, appendContent=appendContent, datasourceOrd=datasourceOrd)    
+    appendContent, datasourceOrd = generateDataSetCFN(datasetObj=RLSdatasetObj, datasourceObjs=RLSdatasetObj.dependingDSources, tableMap=RLSdatasetObj.physicalTableMap, appendContent=appendContent, datasourceOrd=datasourceOrd, lambdaEvent=lambdaEvent)    
     appendContent['Resources'][targetDatasetIdKey]['Properties']['RowLevelPermissionDataSet'] = {
         "Arn" : {
             'Fn::Sub': 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/${datasetId}'.replace('${datasetId}', rlsDatasetId)
@@ -494,12 +548,24 @@ def generateAnalysisFromTemplateCFN(analysisObj: QSAnalysisDef, templateId:str, 
 
     """
 
+    analysis_tag = 'UPDATED_{suffix}'.format(suffix=now.strftime('%d-%m-%y-%H-%M-%S'))
+
     with open('resources/analysis_resource_CFN_skel.yaml', 'r') as file:
         yaml_analysis = yaml.safe_load(file)  
 
     properties = yaml_analysis['Properties']
     properties['AnalysisId'] = analysisObj.id
     properties['Name'] = analysisObj.name    
+    properties['Tags'] = [
+        {
+            'Key': 'Pipeline',
+            'Value': analysisObj.PipelineName
+        },
+        {
+            'Key': 'Updated',
+            'Value': analysis_tag
+        }
+    ]
 
     sourceTemplateArnJoinObj = {
             'Fn::Sub': 'arn:aws:quicksight:${AWS::Region}:${SourceAccountID}:template/{template_id}'.replace('{template_id}', templateId)
@@ -508,11 +574,13 @@ def generateAnalysisFromTemplateCFN(analysisObj: QSAnalysisDef, templateId:str, 
     properties['SourceEntity']['SourceTemplate']['Arn'] = sourceTemplateArnJoinObj
     datasets = analysisObj.datasets
     datasetReferencesObjList = []
-    for datasetId in datasets:
-        datasetReferencesObj = {}
-        datasetObj = analysisObj.datasets[datasetId]
+    for datasetObj in datasets:
+        if datasetObj.isRLS:
+            # Is the RLS dataset, doesn't need to be included in the analysis definition, continuing
+            continue
+        datasetReferencesObj = {}        
         datasetArnJoinObj = {
-            'Fn::Sub': 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/{dataset_id}'.replace('{dataset_id}', datasetId)
+            'Fn::Sub': 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/{dataset_id}'.replace('{dataset_id}', datasetObj.id)
         }
         datasetReferencesObj['DataSetArn'] = datasetArnJoinObj
         datasetReferencesObj['DataSetPlaceholder'] = datasetObj.placeholdername
@@ -645,7 +713,7 @@ def uploadFileToS3(bucket: str, filename: str, region: str, bucket_owner:str, pr
 
     try:
         s3.get_bucket_location(Bucket=bucket, ExpectedBucketOwner=bucket_owner)
-    except botocore.exceptions.ClientError as error:
+    except ClientError as error:
         print('The provided bucket doesn\'t belong to the expected account {account_id}'.format(account_id=bucket_owner))
         return False
 
@@ -669,6 +737,7 @@ def uploadFileToS3(bucket: str, filename: str, region: str, bucket_owner:str, pr
         print('There was an error uploading file {file} to {bucket} at prefix {prefix}'.format(file=object_name, bucket=DEPLOYMENT_S3_BUCKET, prefix=prefix))
         return False
     return True
+
 
 def get_s3_objects(bucket: str, prefix: str, region: str, credentials=None):
 
@@ -792,6 +861,12 @@ def summarize_template(template_content: dict, templateName: str, s3Credentials:
 
     """    
     DIVIDER_SECTION = "----------------------------------------------------------\n"
+    if 'Parameters' not in template_content:
+        print(DIVIDER_SECTION)
+        print("Template {template_name} doesn't contain any parameters, nothing to do in this file".format(template_name=templateName))
+        print(DIVIDER_SECTION)
+        return True
+    
     parameters = template_content['Parameters']
 
     paramFilename = '{output_dir}/{template_name}_README.json'.format(output_dir=OUTPUT_DIR, template_name=templateName)
@@ -837,6 +912,10 @@ def generate_cloudformation_template_parameters(template_content: dict):
     parameter_list = []
     parameter_obj = {}
 
+    if 'Parameters' not in template_content:
+        print('No parameters found in template skipping')
+        return parameter_list
+
     parameters = template_content['Parameters']
 
     for parameter in parameters.keys():
@@ -850,6 +929,39 @@ def generate_cloudformation_template_parameters(template_content: dict):
         parameter_list.append(parameter_obj)
 
     return parameter_list
+
+def check_parameters_cloudformation(param_list, key, region, credentials):
+
+    s3 = boto3.client('s3', region_name=region, aws_access_key_id=credentials['AccessKeyId'], aws_secret_access_key=credentials['SecretAccessKey'], aws_session_token=credentials['SessionToken'])
+
+    print('Checking CFN parameters, S3 object {key} in Bucket {bucket}...'.format(key=key, bucket=DEPLOYMENT_S3_BUCKET))
+    ret =  s3.get_object(Bucket=DEPLOYMENT_S3_BUCKET, Key=key)
+
+    param_object = json.loads(ret['Body'].read())
+    
+    param_object_keys = []
+    param_list_keys = []
+
+    for parameter in param_object:
+        param_object_keys.append(parameter['ParameterKey'])
+    
+    for parameter in param_list:
+        param_list_keys.append(parameter['ParameterKey'])
+
+    if set(param_object_keys) != set(param_list_keys):
+        if set(param_object_keys) > set(param_list_keys):
+            parameters_in_error = set(param_object_keys) - set(param_list_keys)
+            error = 'Not all the parameters configured in your CFN parameter S3 configuration file {key} in Bucket {bucket} are needed in CFN... Extra parameters in S3 are {parameters_in_error}. Please, correct file and try again, consider running MODE: ''INITIALIZE'' to fix this.'.format(key=key, bucket=DEPLOYMENT_S3_BUCKET, parameters_in_error=parameters_in_error)
+        else:
+            parameters_in_error = set(param_list_keys) - set(param_object_keys)
+            error = 'Not all the needed CFN parameters were found in environment configuration file {key} in Bucket {bucket}... Missing parameters in S3 are {parameters_in_error}. Please, add them and try again'.format(key=key, bucket=DEPLOYMENT_S3_BUCKET, parameters_in_error=parameters_in_error)
+        print(error)
+        raise ValueError(error)
+    else:
+        print('All the needed CFN parameters were found in environment configuration file {key} in Bucket {bucket}...'.format(key=key, bucket=DEPLOYMENT_S3_BUCKET))
+    
+
+    return
 
 def get_physical_table_map_object(physical_table_map:dict):
     """
@@ -875,6 +987,92 @@ def get_physical_table_map_object(physical_table_map:dict):
         physicalTableKeys.append(physicalTableKey)
     
     return physicalTableKeys
+
+def json_to_yaml(json_file, yaml_file):
+    """
+    Helper function that converts a JSON file to YAML
+
+    Parameters:
+
+    json_file(str): Path to JSON file
+    yaml_file(str): Path to YAML file
+
+    Returns:
+
+    None
+
+    Examples:
+
+    >>> json_to_yaml(json_file=json_file, yaml_file=yaml_file)
+
+    """    
+    
+    # Read the JSON file and convert it to YAML format
+    with open(json_file, 'r') as f:
+        data = json.load(f)
+    
+    with open(yaml_file, 'w') as f:
+        yaml.dump(data, f)
+    
+    return yaml_file
+
+def add_permissions_to_AAB_resources(template_content:dict):
+    """
+    Helper function that adds permissions to the AAB resources
+
+    Parameters:
+
+    template_content(dict): Template content in YAML
+
+    Returns:
+
+    template_content(dict): Template content in YAML with permissions added
+
+    Examples:
+
+    >>> add_permissions_to_AAB_resources(template_content=template_content)
+
+    """    
+    # Get the list of AAB resources
+    aab_resources = template_content['Resources']
+
+    with open('resources/datasource_CFN_skel.yaml', 'r') as file:
+        yaml_datasource = yaml.safe_load(file) 
+        datasource_permissions_obj = yaml_datasource['Properties']['Permissions']  
+
+    with open('resources/dataset_resource_CFN_skel.yaml', 'r') as file:
+        yaml_dataset = yaml.safe_load(file) 
+        dataset_permissions_obj = yaml_dataset['Properties']['Permissions']  
+    
+    with open('resources/analysis_resource_CFN_skel.yaml', 'r') as file:
+        yaml_analysis = yaml.safe_load(file) 
+        analysis_permissions_obj = yaml_analysis['Properties']['Permissions']  
+
+    updated = False
+
+    for resourceId in aab_resources.keys():
+        resource = aab_resources[resourceId]
+        resourceType = resource['Type']
+        if resourceType in ['AWS::QuickSight::Analysis', 'AWS::QuickSight::DataSet', 'AWS::QuickSight::DataSource']:
+            updated = True            
+        if resource['Type'] == 'AWS::QuickSight::Analysis':
+            resource['Properties']['Permissions'] = copy.deepcopy(analysis_permissions_obj)
+        elif resource['Type'] == 'AWS::QuickSight::DataSet':
+            resource['Properties']['Permissions'] = copy.deepcopy(dataset_permissions_obj)
+        elif resource['Type'] == 'AWS::QuickSight::DataSource':
+            resource['Properties']['Permissions'] = copy.deepcopy(datasource_permissions_obj)
+    
+    if updated:
+        template_content['Parameters']['QSUser'] = {
+            'Description': 'QS Username to provide access to assets in Account where the assets will be created',
+            'Type': 'String'
+        }
+        template_content['Parameters']['DstQSAdminRegion'] = {
+            'Description': 'Admin region for your QS dest account where your users are hosted',
+            'Type': 'String'
+        }
+
+    return template_content    
 
 def generate_template_outputs(analysis_obj:QSAnalysisDef, source_template_content:dict, dest_template_content:dict):
     """
@@ -911,177 +1109,388 @@ def generate_template_outputs(analysis_obj:QSAnalysisDef, source_template_conten
 
     return source_template_content, dest_template_content
 
-def lambda_handler(event, context):
-    ds_count=0
-    CONFIGURATION_FILES_PREFIX = '{pipeline_name}/ConfigFiles'
-    ASSETS_FILES_PREFIX = '{pipeline_name}/CFNTemplates'
+def generate_cloud_formation_override_list_AAB(analysisObj:QSAnalysisDef):
+    """
+    Helper function that generates the CloudFormation template override object to be used in the start_asset_bundle_export_job
+    API call
 
-    if (event is not None and 'DASHBOARD_ID' in event ):
-        DASHBOARD_ID = event['DASHBOARD_ID']
-    else:
-        raise ValueError('No dashboard id provided in lambda event object')
+    Parameters:
+
+    analysisObj(QSAnalysisDef): Analysis object as returned by describe_analysis QS API method
+
+    Returns:
+
+    CloudFormationOverridePropertyConfiguration(object): Object with overrides to use in start_asset_bundle_export_job
+
+    Examples:
+
+    >>> generate_cloud_formation_override_list_AAB(analysisObj=analysisObj)
+
+    """    
+    vpc_conn_arns = []
+    VPCConnectionOverridePropertiesList = []
+    refresh_schedules_arns = []
+    RefreshScheduleOverridePropertiesList = []
+    datasource_arns = []
+    DataSourceOverridePropertiesList = []
     
-    # Get the associated analyisis
+    
+    for dataset in analysisObj.datasets:
+        if dataset.refreshSchedules != []:
+            for schedule in dataset.refreshSchedules:
+                refresh_schedules_arns.append(schedule['Arn'])
+                RefreshScheduleOverridePropertyObj = {
+                    'Arn': schedule['Arn'],
+                    'Properties': ['StartAfterDateTime']
+                }
+                RefreshScheduleOverridePropertiesList.append(RefreshScheduleOverridePropertyObj)
+            
+        for datasource in dataset.dependingDSources:
+            if datasource.arn not in datasource_arns:
+                datasource_arns.append(datasource.arn)
+            else:
+                print('generate_cloud_formation_override_list_AAB: Skipping datasource {datasource_name} as it has been already processed'.format(datasource_name=datasource.name))
+                continue
+            if (isinstance(datasource, QSRDSDatasourceDef) or isinstance(datasource, QSRDBMSDatasourceDef)) and datasource.vpcConnectionArn != '':
+                vpc_conn_arns.append(datasource.vpcConnectionArn)
+            properties = []
+            if isinstance(datasource, QSRDSDatasourceDef):
+                properties = ['SecretArn','Username','Password','InstanceId', 'Database']
+            if isinstance(datasource, QSRDBMSDatasourceDef):
+                properties = ['SecretArn','Username','Password','Host', 'Database']
+                if datasource.type == SourceType.REDSHIFT:
+                    properties.append('ClusterId')
+            if isinstance(datasource, QSServiceDatasourceDef):
+                if datasource.type == SourceType.S3:
+                    properties = ['ManifestFileLocation']
+                if datasource.type == SourceType.ATHENA:
+                    properties = ['WorkGroup']
+            DataSourceOverridePropertyObj = {
+                'Arn': datasource.arn,
+                'Properties': properties
+            }
+            DataSourceOverridePropertiesList.append(DataSourceOverridePropertyObj)
 
-    ret = qs.describe_dashboard(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DashboardId=DASHBOARD_ID)
+    #remove any duplicates
+    vpc_conn_arns = list(set(vpc_conn_arns))
 
-    source_analysis_arn = ret['Dashboard']['Version']['SourceEntityArn']
+    for vpc_conn_arn in vpc_conn_arns:
+        VPCConnectionOverridePropertyObj = {
+                'Arn': vpc_conn_arn,
+                'Properties': ['Name','DnsResolvers','RoleArn',]
+        }
+        VPCConnectionOverridePropertiesList.append(VPCConnectionOverridePropertyObj)
 
-    ANALYSIS_ID = source_analysis_arn.split('analysis/')[1]
+    CloudFormationOverridePropertyConfiguration={
+        'ResourceIdOverrideConfiguration': {
+            'PrefixForAllResources': False
+        },
+        'VPCConnections': VPCConnectionOverridePropertiesList,
+        'RefreshSchedules': RefreshScheduleOverridePropertiesList,
+        'DataSources': DataSourceOverridePropertiesList        
+    }
 
-    ret = qs.describe_analysis(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AnalysisId=ANALYSIS_ID)
-    permissions = qs.describe_analysis_permissions(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AnalysisId=ANALYSIS_ID)
-    owner = permissions['Permissions'].pop()
-    username =  owner['Principal'].split('default/')
-    qs_admin_region = owner['Principal'].split(':')[3]
+    return CloudFormationOverridePropertyConfiguration
 
-    analysis_arn = ret['Analysis']['Arn']
-    analysis_region = analysis_arn.split(':')[3]
-    analysis_name = ret['Analysis']['Name']
-    analysis_id = ret['Analysis']['AnalysisId']
-    dataset_arns = ret['Analysis']['DataSetArns']
+def replicate_dashboard_via_template(analysisObj:QSAnalysisDef, remap):
+    """
+    Helper function that replicates a QuickSight dashboard using a template and also create assets for all the depending assets (datasets, datasources and secrets)
 
-    datasources = []
-    datasourceDefObjList = []
-    datasetsDefObjList = []
-    datasetDictionary = {}
+    Parameters: 
+    
+    analysisObj(QSAnalysisDef): Analysis object as returned by describe_analysis QS API method
+    remap(Boolean): Whether or not the datasource definitions should be remapped (always True for AAB)    
+    Returns:
+
+    None
+
+    Examples:
+
+    >>> replicate_dashboard_template(analysisObj, remap)
+
+    """    
+    
     dest_account_yaml = {}
 
     with open('resources/dest_CFN_skel.yaml', 'r') as file:
         dest_account_yaml = yaml.safe_load(file)     
 
-    dest_account_yaml['Resources'] = {} 
+    dest_account_yaml['Resources'] = {}     
 
-    physicalTableKeys = []
+    datasets = analysisObj.datasets
 
+    for datasetDefObj in datasets:        
+        
+        for datasourceDefObj in datasetDefObj.dependingDSources:
+            try:
+                dest_account_yaml = generateDataSourceCFN(datasourceDefObj=datasourceDefObj, appendContent=dest_account_yaml, remap=remap)
+            except ValueError as error:
+                print(error)
+                print('There was an issue creating the following datasource: {datasourceId} cannot proceed further'.format(datasourceId=datasourceDefObj.id))
+                return {
+                'statusCode': 500
+                }            
 
+    source_account_yaml, SOURCE_TEMPLATE_ID = generateQSTemplateCFN(analysisDefObj=analysisObj)   
+    
+    for datasetObj in analysisObj.datasets:
+        dest_account_yaml = generateDataSetCFN(datasetObj=datasetObj, datasourceObjs=datasetObj.dependingDSources, tableMap=datasetObj.physicalTableMap, appendContent=dest_account_yaml)
 
+    dest_account_yaml = generateAnalysisFromTemplateCFN(analysisObj=analysisObj, templateId=SOURCE_TEMPLATE_ID, appendContent=dest_account_yaml)
 
-    for datasetarn in dataset_arns:
+    source_account_yaml, dest_account_yaml = generate_template_outputs(analysis_obj=analysisObj, source_template_content=source_account_yaml, dest_template_content=dest_account_yaml)
+
+    
+    return source_account_yaml, dest_account_yaml
+
+def replicate_dashboard_via_AAB(analysisObj:QSAnalysisDef, remap):
+    """
+    Helper function that replicates a QuickSight dashboard using a assets as bundle and outputs results in CLOUDFORMATION_JSON 
+
+    Parameters: 
+    
+    analysisObj(QSAnalysisDef): Analysis object as returned by describe_analysis QS API method
+    remap(Boolean): Whether or not the datasource definitions and other properties should be remapped (more info here https://a.co/g1Tf0fp)
+    
+    Returns:
+
+    None
+
+    Examples:
+
+    >>> replicate_dashboard_template(analysisObj, event)
+
+    """   
+
+    MAX_RETRIES = 5
+    now = datetime.now()    
+    EXPORT_JOB_ID = 'QS_CI_CD_EXPORT_{suffix}'.format(suffix=now.strftime('%d-%m-%y-%H-%M-%S'))
+    EXPORT_TERMINAL_STATUSES = ['SUCCESSFUL', 'FAILED']
+    initial_wait_time_sec = 5
+
+    resourceArns = [analysisObj.arn]
+
+    if remap:
+        CloudFormationOverridePropertyConfiguration = generate_cloud_formation_override_list_AAB(analysisObj=analysisObj)   
+        ret = qs.start_asset_bundle_export_job (AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AssetBundleExportJobId=EXPORT_JOB_ID, ResourceArns=resourceArns, IncludeAllDependencies=True, 
+                                      ExportFormat='CLOUDFORMATION_JSON', CloudFormationOverridePropertyConfiguration=CloudFormationOverridePropertyConfiguration, ValidationStrategy={'StrictModeForAllResources':False})
+    else:
+        ret = qs.start_asset_bundle_export_job (AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AssetBundleExportJobId=EXPORT_JOB_ID, ResourceArns=resourceArns, IncludeAllDependencies=True, 
+                                      ExportFormat='CLOUDFORMATION_JSON', ValidationStrategy={'StrictModeForAllResources':False})
+    
+    # Check progress
+
+    
+
+    while MAX_RETRIES > 0:
+        MAX_RETRIES = MAX_RETRIES - 1
+        ret = qs.describe_asset_bundle_export_job(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AssetBundleExportJobId=EXPORT_JOB_ID)
+        if ret['JobStatus'] in EXPORT_TERMINAL_STATUSES:
+            break
+        print('Assets as Bundle export job with id {id} is currently in a non terminal status ({status}) waiting for {seconds} seconds'.format(id=EXPORT_JOB_ID, status=ret['JobStatus'], seconds=initial_wait_time_sec))
+        time.sleep(initial_wait_time_sec)
+        initial_wait_time_sec = initial_wait_time_sec * 2
+
+    if ret['JobStatus'] == 'FAILED':
+        raise ValueError('Export job with ID {id} failed with error {error}, cannot continue'.format(id=EXPORT_JOB_ID, error=ret['Errors']))
+    
+    downloadURL = ret['DownloadUrl']
+
+    json_filename = '{output_dir}/{analysis_id}_CFN_bundle.json'.format(output_dir=OUTPUT_DIR, analysis_id=analysisObj.id)
+    yaml_filename = '{output_dir}/{analysis_id}_CFN_bundle.yaml'.format(output_dir=OUTPUT_DIR, analysis_id=analysisObj.id)
+    
+    if downloadURL.lower().startswith('http'):
+        ret = urlretrieve(downloadURL, json_filename)
+    else:
+        raise ValueError('Illegal scheme in downloadURL ({downloadURL}) should be http(s). Aborting ...'.format(downloadURL=downloadURL))
+
+    json_to_yaml(json_file=json_filename, yaml_file=yaml_filename)
+
+    with open('resources/dummy_CFN_skel.yaml', 'r') as file:
+        source_account_yaml = yaml.safe_load(file)
+    
+    with open(yaml_filename, 'r') as file:
+        dest_account_yaml = yaml.safe_load(file)
+    
+    return source_account_yaml, dest_account_yaml
+
+def lambda_handler(event, context):
+
+    calledViaEB = False
+
+    remap = REMAP_DS == 'true'
+
+    if 'source' in event and event['source'] == 'aws.quicksight':
+        print('Lambda function called via EventBridge')
+        calledViaEB = True
+        if 'resources' in event:
+            updated_dashboard_id = event['resources'].pop().split('dashboard/')[1]
+        if updated_dashboard_id != DASHBOARD_ID:
+            print('This lambda is configured to promote dashboard id {dashboard_id}, however the updated dashboard in event is {updated_dashboard_id}. Skipping ...'.format(dashboard_id=DASHBOARD_ID, updated_dashboard_id=updated_dashboard_id))
+            return {
+                'statusCode': 200
+            }
+    
+    CONFIGURATION_FILES_PREFIX = '{pipeline_name}/ConfigFiles'
+    ASSETS_FILES_PREFIX = '{pipeline_name}/CFNTemplates'    
+
+    if not calledViaEB and 'METHOD' not in event:
+        raise ValueError('A valid replication METHOD is required in the event object, supported METHOD are: TEMPLATE or ASSETS_AS_BUNDLE')
+
+    replication_handler = None
+
+    ## Create Analysis Object
+    
+    ret = qs.describe_dashboard(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DashboardId=DASHBOARD_ID)
+    source_analysis_arn = ret['Dashboard']['Version']['SourceEntityArn']
+    analysis_id = source_analysis_arn.split('analysis/')[1]
+    ret = qs.describe_analysis(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AnalysisId=analysis_id)
+    dataset_arns = ret['Analysis']['DataSetArns']
+    ds_count = 0
+    datasourceDefObjList = []
+    datasetsDefObjList = []
+    analysis_name = ret['Analysis']['Name']
+    permissions = qs.describe_analysis_permissions(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AnalysisId=analysis_id)
+    owner = permissions['Permissions'].pop()
+    username =  owner['Principal'].split('default/')
+    qs_admin_region = owner['Principal'].split(':')[3]
+    analysis_arn = ret['Analysis']['Arn']
+    analysis_region = analysis_arn.split(':')[3]
+
+    rls_dataset_ids = []
+
+    for datasetarn in dataset_arns:    
+        ret_refresh_schedules  = []
         physicalTableKeys = []
+        dset_datasources = []
         datasourceDefObjList = []
-        datasources = []
         datasetId = datasetarn.split('dataset/')[-1]
         ret = qs.describe_data_set(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DataSetId=datasetId )
-        
-        datasourceArn = ''
         physicalTableKeys= get_physical_table_map_object(ret['DataSet']['PhysicalTableMap'])
         
         importMode = None
-        ret_refresh_schedules  = []
         if ret['DataSet']['ImportMode'] == ImportMode.SPICE.name:
             importMode = ImportMode.SPICE
             ret_refresh_schedules = qs.list_refresh_schedules(AwsAccountId=SOURCE_AWS_ACCOUNT_ID, DataSetId=datasetId)
         else:
             importMode = ImportMode.DIRECT_QUERY
-
-
-
         datasetObj = QSDataSetDef(name=ret['DataSet']['Name'], id=datasetId, importMode=importMode, placeholdername=ret['DataSet']['Name'], refreshSchedules=ret_refresh_schedules, physicalTableMap=physicalTableKeys)
-        datasetDictionary[datasetId] = datasetObj    
 
+        #Get depending datasources
         for physicalTableKey in physicalTableKeys:
-            tableTypeKey = list(ret['DataSet']['PhysicalTableMap'][physicalTableKey].keys()).pop()
-            datasourceArn = ret['DataSet']['PhysicalTableMap'][physicalTableKey][tableTypeKey]['DataSourceArn']
-            datasourceId = datasourceArn.split('datasource/')[-1]
-            datasources.append(datasourceId)
+                tableTypeKey = list(ret['DataSet']['PhysicalTableMap'][physicalTableKey].keys()).pop()
+                datasourceArn = ret['DataSet']['PhysicalTableMap'][physicalTableKey][tableTypeKey]['DataSourceArn']
+                datasourceId = datasourceArn.split('datasource/')[-1]
+                dset_datasources.append(datasourceId)
         
         #Using set to avoid duplicated datasources to be created (one dataset could use the same datasource several times)
-        datasources = list(set(datasources))
+        dset_datasources = list(set(dset_datasources))
 
-        dataSourceDefObj = {}
-        for datasourceId in datasources:
-            try:
-                exists = False
-                CFNId = 'DS{id}'.format(id=datasourceId.replace('-', ''))
-                if CFNId in dest_account_yaml['Resources']:
-                    exists = True                    
-                dest_account_yaml, dataSourceDefObj = generateDataSourceCFN(datasourceId=datasourceId, appendContent=dest_account_yaml, index=ds_count, lambdaEvent=event)
-                datasourceDefObjList.append(dataSourceDefObj)
-            except ValueError as error:
-                print(error)
-                print('There was an issue creating the following datasource: {datasourceId} cannot proceed further'.format(datasourceId=datasourceId))
-                return {
-                'statusCode': 500
-                }
-            
-            if not exists:
-                ds_count = ds_count + 1           
-
+        for datasourceId in dset_datasources:
+            dataSourceDefObj = {}            
+            dataSourceDefObj = generateDataSourceObject(datasourceId=datasourceId, datasourceIndex=ds_count)
+            datasourceDefObjList.append(dataSourceDefObj)
+            ds_count = ds_count + 1
+        
         datasetObj.dependingDSources = datasourceDefObjList
-
-    datasetsDefObjList.append(datasetObj)
-
-    source_account_yaml, SOURCE_TEMPLATE_ID = generateQSTemplateCFN(analysisName=analysis_name, datasetDict=datasetDictionary, analysisArn=analysis_arn)
-    analysis = QSAnalysisDef(name=analysis_name, id=analysis_id,QSAdminRegion=qs_admin_region, QSRegion=analysis_region, QSUser=username, AccountId=SOURCE_AWS_ACCOUNT_ID, TemplateId=SOURCE_TEMPLATE_ID)
-    analysis.datasets = datasetDictionary
-
-    source_account_yaml, dest_account_yaml = generate_template_outputs(analysis_obj=analysis, source_template_content=source_account_yaml, dest_template_content=dest_account_yaml)
-
-    QSSourceAssetsFilename = '{output_dir}/QStemplate_CFN_SOURCE.yaml'.format(output_dir=OUTPUT_DIR)
-    writeToFile(filename=QSSourceAssetsFilename, content=source_account_yaml)
-
-    datasourceOrd = ds_count
-    for datasetId in analysis.datasets.keys():        
-        datasetObj = analysis.datasets[datasetId]    
-        dest_account_yaml, datasourceOrd = generateDataSetCFN(datasetObj=datasetObj, datasourceObjs=datasetObj.dependingDSources, tableMap=datasetObj.physicalTableMap, appendContent=dest_account_yaml, datasourceOrd=datasourceOrd)
-
-
-    dest_account_yaml = generateAnalysisFromTemplateCFN(analysisObj=analysis, templateId=SOURCE_TEMPLATE_ID, appendContent=dest_account_yaml)
-
-    QSDestAssetsFilename = '{output_dir}/QS_assets_CFN_DEST.yaml'.format(output_dir=OUTPUT_DIR)
-
-    writeToFile(filename=QSDestAssetsFilename, content=dest_account_yaml)
-
-    # Upload assets to S3 in deployment account
-
-    credentials = assumeRoleInDeplAccount(role_arn=DEPLOYMENT_DEV_ACCOUNT_ROLE_ARN)
-
-    if 'PIPELINE_NAME' in event:
-        CONFIGURATION_FILES_PREFIX = CONFIGURATION_FILES_PREFIX.format(pipeline_name=event['PIPELINE_NAME'])
-        ASSETS_FILES_PREFIX = ASSETS_FILES_PREFIX.format(pipeline_name=event['PIPELINE_NAME'])
-    else:
-        CONFIGURATION_FILES_PREFIX = 'ConfigFiles/'
-        ASSETS_FILES_PREFIX = 'CFNTemplates'
-
-    if 'MODE' not in event or event['MODE'] == 'INITIALIZE':
+        datasetsDefObjList.append(datasetObj)
+        if 'RowLevelPermissionDataSet' in ret['DataSet'] and bool(ret['DataSet']['RowLevelPermissionDataSet']):
+            # Dataset contains row level permission, we need add to depending resources  
+            dataset_arns.append(ret['DataSet']['RowLevelPermissionDataSet']['Arn'])
+            datasetObj.rlsDSetDef = ret['DataSet']['RowLevelPermissionDataSet']
+            rls_dataset_ids.append(ret['DataSet']['RowLevelPermissionDataSet']['Arn'].split('dataset/')[-1])
         
-        print("{mode} was requested via event in Lambda, generating sample configuration files in {config_files_prefix} prefix on {bucket} in the deployment account {deployment_account} to be filled with \
-            parametrized values for each environment".format(mode=event['MODE'], config_files_prefix=CONFIGURATION_FILES_PREFIX, bucket=DEPLOYMENT_S3_BUCKET, deployment_account=DEPLOYMENT_ACCOUNT_ID))
-
-        for stage in STAGES_NAMES.split(",")[1:]:
-            source_param_list = generate_cloudformation_template_parameters(template_content=source_account_yaml)
-            dest_param_list = generate_cloudformation_template_parameters(template_content=dest_account_yaml)
-            source_assets_param_file_path = writeToFile('{output_dir}/source_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=source_param_list, format='json')
-            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=source_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, bucket_owner=DEPLOYMENT_ACCOUNT_ID, credentials=credentials)
-            dest_assets_param_file_path = writeToFile('{output_dir}/dest_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=dest_param_list, format='json')
-            uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=dest_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
-
-        summarize_template(template_content=source_account_yaml, templateName="SourceAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
-        summarize_template(template_content=dest_account_yaml, templateName="DestinationAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
-
-    elif event['MODE'] == 'DEPLOY':
-
-        print("{mode} was requested via event in Lambda, proceeding with the generation of assets based with the config  files in {config_files_prefix}\
-            prefix on {bucket} in the deployment account {deployment_account}".format(mode=event['MODE'], config_files_prefix=ASSETS_FILES_PREFIX, bucket=DEPLOYMENT_S3_BUCKET, deployment_account=DEPLOYMENT_ACCOUNT_ID))
-
-        # Create source artifact file
-        zip_file = '{output_dir}/SOURCE_assets_CFN.zip'.format(output_dir=OUTPUT_DIR)
         
-        source_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/source_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
-        source_files.append(QSSourceAssetsFilename)
+    analysis = QSAnalysisDef(name=analysis_name, arn=analysis_arn,QSAdminRegion=qs_admin_region, QSRegion=analysis_region, QSUser=username, AccountId=SOURCE_AWS_ACCOUNT_ID, TemplateId=SOURCE_TEMPLATE_ID, PipelineName=PIPELINE_NAME)
+    analysis.datasets = datasetsDefObjList
 
-        ret_source = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=source_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+    #Now we need to tag RLS datasets to make sure they are not included in Analysis template definition
 
-        # Create dest artifact file
-        zip_file = '{output_dir}/DEST_assets_CFN.zip'.format(output_dir=OUTPUT_DIR)
-        
-        dest_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/dest_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
-        dest_files.append(QSDestAssetsFilename)
-        ret_dest = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=dest_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+    for dataset_id in rls_dataset_ids:
+        rls_dset_obj = analysis.getDatasetById(dataset_id)
+        rls_dset_obj.isRLS = True
 
+    if REPLICATION_METHOD == 'TEMPLATE':
+        replication_handler = replicate_dashboard_via_template
+    elif REPLICATION_METHOD == 'ASSETS_AS_BUNDLE':
+        replication_handler = replicate_dashboard_via_AAB
 
+    try:
+        source_account_yaml, dest_account_yaml = replication_handler(analysis, remap)
+
+        if REPLICATION_METHOD == 'ASSETS_AS_BUNDLE':
+            dest_account_yaml = add_permissions_to_AAB_resources(dest_account_yaml)
+
+        QSSourceAssetsFilename = '{output_dir}/QStemplate_CFN_SOURCE.yaml'.format(output_dir=OUTPUT_DIR)
+        writeToFile(filename=QSSourceAssetsFilename, content=source_account_yaml)
+
+        QSDestAssetsFilename = '{output_dir}/QS_assets_CFN_DEST.yaml'.format(output_dir=OUTPUT_DIR)
+
+        writeToFile(filename=QSDestAssetsFilename, content=dest_account_yaml)
+
+        # Upload assets to S3 in deployment account
+
+        credentials = assumeRoleInDeplAccount(role_arn=DEPLOYMENT_DEV_ACCOUNT_ROLE_ARN)
+
+        CONFIGURATION_FILES_PREFIX = CONFIGURATION_FILES_PREFIX.format(pipeline_name=PIPELINE_NAME)
+        ASSETS_FILES_PREFIX = ASSETS_FILES_PREFIX.format(pipeline_name=PIPELINE_NAME)
+
+        source_param_list = generate_cloudformation_template_parameters(template_content=source_account_yaml)
+        dest_param_list = generate_cloudformation_template_parameters(template_content=dest_account_yaml)
+
+        deployment_stages = STAGES_NAMES.split(",")[1:]
+
+        if MODE == 'INITIALIZE':
+            
+            print("{mode} was requested, generating sample configuration files in {config_files_prefix} prefix on {bucket} in the deployment account {deployment_account} to be filled with \
+                parametrized values for each environment".format(mode=MODE, config_files_prefix=CONFIGURATION_FILES_PREFIX, bucket=DEPLOYMENT_S3_BUCKET, deployment_account=DEPLOYMENT_ACCOUNT_ID))
+
+            for stage in deployment_stages:
+                source_assets_param_file_path = writeToFile('{output_dir}/source_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=source_param_list, format='json')
+                uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=source_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, region=DEPLOYMENT_S3_REGION, bucket_owner=DEPLOYMENT_ACCOUNT_ID, credentials=credentials)
+                dest_assets_param_file_path = writeToFile('{output_dir}/dest_cfn_template_parameters_{stage}.txt'.format(output_dir=OUTPUT_DIR, stage=stage.strip()), content=dest_param_list, format='json')
+                uploadFileToS3(bucket=DEPLOYMENT_S3_BUCKET, filename=dest_assets_param_file_path, prefix=CONFIGURATION_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+
+            summarize_template(template_content=source_account_yaml, templateName="SourceAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
+            summarize_template(template_content=dest_account_yaml, templateName="DestinationAssets", s3Credentials=credentials, conf_files_prefix=CONFIGURATION_FILES_PREFIX)
+
+        elif calledViaEB or (MODE == 'DEPLOY'):
+            try:
+                for stage in deployment_stages:
+                    print("Checking source CFN parameters in CFN template for {stage}".format(stage=stage))
+                    check_parameters_cloudformation(param_list=source_param_list, key='{prefix}/source_cfn_template_parameters_{stage}.txt'.format(prefix=CONFIGURATION_FILES_PREFIX, stage=stage.strip()), region=AWS_REGION, credentials=credentials)
+                    print("Checking dest CFN parameters in CFN template for {stage}".format(stage=stage))
+                    check_parameters_cloudformation(param_list=dest_param_list, key='{prefix}/dest_cfn_template_parameters_{stage}.txt'.format(prefix=CONFIGURATION_FILES_PREFIX, stage=stage.strip()), region=AWS_REGION, credentials=credentials)
+            except ValueError as error:            
+                print('There was an issue with the CFN parameters file for stage, correct your CFN parameter file or run the function again with MODE: ''INITIALIZE'''.format(stage=stage))
+                raise ValueError(error)
+                
+
+            print("{mode} was requested via event in Lambda, proceeding with the generation of assets based with the config  files in {config_files_prefix}\
+                    prefix on {bucket} in the deployment account {deployment_account}".format(mode=MODE, config_files_prefix=ASSETS_FILES_PREFIX, bucket=DEPLOYMENT_S3_BUCKET, deployment_account=DEPLOYMENT_ACCOUNT_ID))
+            
+            # Create source artifact file
+            zip_file = '{output_dir}/SOURCE_assets_CFN.zip'.format(output_dir=OUTPUT_DIR)
+            
+            source_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/source_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
+            source_files.append(QSSourceAssetsFilename)
+
+            ret_source = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=source_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+
+            # Create dest artifact file
+            zip_file = '{output_dir}/DEST_assets_CFN.zip'.format(output_dir=OUTPUT_DIR)
+            
+            dest_files = get_s3_objects(bucket=DEPLOYMENT_S3_BUCKET, prefix='{config_files_prefix}/dest_cfn_template_parameters_'.format(config_files_prefix=CONFIGURATION_FILES_PREFIX), region=DEPLOYMENT_S3_REGION, credentials=credentials)
+            dest_files.append(QSDestAssetsFilename)
+            ret_dest = zipAndUploadToS3(bucket=DEPLOYMENT_S3_BUCKET, files=dest_files, zip_name=zip_file,  prefix=ASSETS_FILES_PREFIX, bucket_owner=DEPLOYMENT_ACCOUNT_ID, region=DEPLOYMENT_S3_REGION, credentials=credentials)
+    
+    except ValueError as error:
+        return {
+            'statusCode': 500,
+            'error': str(error) 
+        }
+    
     return {
-        'statusCode': 200
+            'statusCode': 200    
     }
     

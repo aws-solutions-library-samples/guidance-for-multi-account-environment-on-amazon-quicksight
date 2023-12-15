@@ -16,20 +16,22 @@ class SourceType(Enum):
 class QSDataSourceDef:
     name =''
     id = ''
+    arn = ''
     datasetArns = []
     CFNId = ''
     index = 0
-    def __init__(self, name: str, id: str, index: int):
+    def __init__(self, name: str, arn: str, index: int):
         self.name = name
-        self.id = id
-        self.CFNId = 'DS{id}'.format(id=id.replace('-', ''))
+        self.arn = arn
+        self.id = arn.split('datasource/')[-1]        
+        self.CFNId = 'DS{id}'.format(id=self.id.replace('-', ''))
         self.index = index
 
 class QSServiceDatasourceDef(QSDataSourceDef):
     parameters = {}
     type = None
 
-    def __init__(self, name: str, id: str, parameters: object, type: SourceType, index: int):
+    def __init__(self, name: str, arn: str, parameters: object, type: SourceType, index: int):
         self.type = type
         self.parameters = parameters
 
@@ -45,25 +47,28 @@ class QSServiceDatasourceDef(QSDataSourceDef):
                 raise ValueError("resources.datasources.QSServiceDatasourceDef Error: Athena Datasource Type should contain WorkGroup in properties")        
         
 
-        super().__init__(name, id, index)
+        super().__init__(name, arn, index)
 
 
 class QSRDSDatasourceDef(QSDataSourceDef):
     vpcConnectionArn = ''
     instanceId = ''
     database = ''
-    type = SourceType.RDS
+    type = ''
     vpcConnectionArn = ''
+    secretArn = ''
 
-    def __init__(self, name: str, id: str, parameters: object, vpcConnectionArn: str, index: int):
-        if vpcConnectionArn is not None:
-            self.vpcConnectionArn = vpcConnectionArn
+    def __init__(self, name: str, arn: str, parameters: object, type: SourceType,  index: int):
+        if 'VpcConnectionArn' in parameters:
+            self.vpcConnectionArn = parameters['VpcConnectionArn']
         if 'InstanceId' in parameters:
             self.instanceId = parameters['InstanceId']
         if 'Database' in parameters:
             self.database = parameters['Database']
-
-        super().__init__(name, id, index)
+        if 'SecretArn' in parameters:
+            self.secretArn = parameters['SecretArn']
+        self.type = type
+        super().__init__(name, arn, index)
         
 
 class QSRDBMSDatasourceDef(QSDataSourceDef):
@@ -73,11 +78,14 @@ class QSRDBMSDatasourceDef(QSDataSourceDef):
     database = ''
     vpcConnectionArn = ''
     clusterId = ''
+    type = ''
     parameters = {}
+    secretArn = ''
+    dSourceParamKey = ''
 
-    def __init__(self, name: str, id: str, parameters: object, vpcConnectionArn: str, index: int):
-        if vpcConnectionArn is not None:
-            self.vpcConnectionArn = vpcConnectionArn
+    def __init__(self, name: str, arn: str, parameters: object, type: SourceType, index: int, dSourceParamKey:str):
+        if 'VpcConnectionArn' in parameters:
+            self.vpcConnectionArn = parameters['VpcConnectionArn']            
         if 'Host' in parameters:
             self.host = parameters['Host']
         if 'Database' in parameters:
@@ -86,6 +94,10 @@ class QSRDBMSDatasourceDef(QSDataSourceDef):
             self.port = parameters['Port']
         if 'ClusterId' in parameters:
             self.clusterId = parameters['ClusterId']
+        if 'SecretArn' in parameters:
+            self.secretArn = parameters['SecretArn']
         self.parameters = parameters
+        self.dSourceParamKey = dSourceParamKey
+        self.type = type
 
-        super().__init__(name, id, index)
+        super().__init__(name, arn, index)

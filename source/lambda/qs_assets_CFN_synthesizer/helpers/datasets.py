@@ -13,13 +13,15 @@ class QSDataSetDef:
     physicalTableMap = []
     refreshSchedules = []
     CFNId = ''
+    rlsDSetDef = None
     importMode = None
+    isRLS = False
     def __init__(self, name: str, id: str, importMode: ImportMode, placeholdername: str, refreshSchedules: list, physicalTableMap: object):
         self.name = name
         self.id = id
         self.CFNId = 'DSet{id}'.format(id=id.replace('-', ''))        
         self.placeholdername = placeholdername
-        self.physicalTableMap = physicalTableMap
+        self.physicalTableMap = physicalTableMap        
         if 'RefreshSchedules' in refreshSchedules: 
             self.refreshSchedules = refreshSchedules['RefreshSchedules']        
 

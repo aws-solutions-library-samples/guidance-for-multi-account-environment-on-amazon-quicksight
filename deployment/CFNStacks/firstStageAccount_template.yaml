@@ -41,6 +41,26 @@ Parameters:
     Description: List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)
     Type: String
     Default: "DEV, PRE, PRO"
+  DashboardId:
+    Description: Dashboard ID in development you want to track changes for
+    Type: String
+  ReplicationMethod:
+    Description: Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)
+    Type: String
+    AllowedValues: 
+      - TEMPLATE
+      - ASSETS_AS_BUNDLE
+    Default: ASSETS_AS_BUNDLE
+  RemapDS:
+    Description: Whether or not to remap the data sources connection properties in the dashboard datasets (when using templates) or supported properties when using Assets As Bundle (more info here https://a.co/jeHZkOr)
+    Type: String
+    Default: YES
+    AllowedValues: 
+      - YES
+      - NO
+  PipelineName:
+    Description: Name of the Code Pipeline whose source assets this lambda will be contributing to
+    Type: String
     
 
 Resources: 
@@ -59,7 +79,7 @@ Resources:
       MemorySize: 128
       Role: !GetAtt QSlambdaExecRole.Arn
       Runtime: python3.11
-      ReservedConcurrentExecutions: 5
+      ReservedConcurrentExecutions: 5      
       Timeout: 300
       Layers:
         - !Ref lambdaLayer
@@ -81,11 +101,30 @@ Resources:
             !Ref DestQSUser
           STAGES_NAMES:   
             !Ref StageNames
+          DASHBOARD_ID: 
+            !Ref DashboardId
+          REPLICATION_METHOD:
+            !Ref ReplicationMethod
+          REMAP_DS:
+            !Ref RemapDS
+          PIPELINE_NAME:
+            !Ref PipelineName
+          MODE:
+            INITIALIZE
       Code:
         S3Bucket: !Ref SourceCodeS3Bucket
         S3Key: !Ref SourceCodeKey
-        
-        
+  
+  resourceBasedPerm:
+    DependsOn:
+      - lambdaFunction
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction      
+      FunctionName: QSAssetsCFNSynthesizer      
+      Principal: events.amazonaws.com
+      SourceArn :
+        Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/QuickSightDashboardUpdateRule   
       
   QSlambdaExecRole:
     Type: AWS::IAM::Role
@@ -108,37 +147,52 @@ Resources:
          PolicyDocument:
            Version: "2012-10-17"
            Statement:
-            - Action: quicksight:DescribeDataSet
+            - Action: 
+              - quicksight:DescribeDataSet
+              - quicksight:ListRefreshSchedules
+              - quicksight:DescribeDataSetRefreshProperties
+              - quicksight:DescribeRefreshSchedule
               Effect: Allow
               Resource: 
                 - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dataset/*" ]]
               Sid: 1
-            - Action:
-              - quicksight:DescribeAnalysis
-              - quicksight:DescribeDataSource
-              - quicksight:DescribeRefreshSchedule
-              - quicksight:DescribeDashboard              
+            - Action:                         
+              - quicksight:StartAssetBundleExportJob
+              - quicksight:DescribeAssetBundleExportJob
               Effect: Allow
-              Resource:
-                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":analysis/*"]]
-                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dataset/*/refresh-schedule/*"]]
-                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":datasource/*"]]
-                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dashboard/*"]]
+              Resource:                                                
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":asset-bundle-export-job/*"]]
               Sid: 2
-            - Action: quicksight:ListRefreshSchedules
-              Effect: Allow
-              Resource: '*'
-              Sid: 3
             - Action: sts:AssumeRole
               Effect: Allow
               Resource: 
                 - !Join ["", ["arn:aws:iam::", !Ref DeploymentAccountId, ":role/DevAccountS3AccessRole"]]
+              Sid: 3
+            - Action: 
+              - quicksight:DescribeDashboard              
+              Effect: Allow
+              Resource: 
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":dashboard/*"]]
               Sid: 4
-            - Action: quicksight:DescribeAnalysisPermissions
+            - Action: 
+              - quicksight:DescribeAnalysisPermissions
+              - quicksight:DescribeAnalysis
               Effect: Allow
               Resource: 
                 - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":analysis/*"]]
-              Sid: 5
+              Sid: 5            
+            - Action: 
+              - quicksight:DescribeDataSource
+              Effect: Allow
+              Resource: 
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":datasource/*"]]
+              Sid: 6
+            - Action: 
+              - quicksight:DescribeVPCConnection
+              Effect: Allow
+              Resource: 
+                - !Join ["", [ "arn:aws:quicksight:*:", !Ref AWS::AccountId, ":vpcConnection/*"]]
+              Sid: 7
   lambdaLayer:
     Type: AWS::Lambda::LayerVersion
     Properties: 
@@ -151,6 +205,22 @@ Resources:
         S3Key: !Ref LayerCodeKey  
       Description: Layer containing up to date boto3 package and PyYAML needed by QSAssetsCFNSynthesizer function
       LayerName: QSAssetsCFNSynthesizer
+  
+  eventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: QuickSightDashboardUpdateRule
+      Description: Rule that triggers when a particular dashboard is updated
+      EventPattern:
+        source:
+          - "aws.quicksight" 
+        detail-type:
+          - "QuickSight Dashboard Published Version Updated"        
+      State:  ENABLED
+      Targets:
+      - 
+        Arn: !GetAtt lambdaFunction.Arn
+        Id: QSAssetsCFNSynthesizerTarget        
       
 Outputs:
   LambdaFunction:
