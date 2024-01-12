@@ -1,0 +1,20 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Dummy template used as placeholder, doesn''t actually create any resources'
+ 
+Conditions:
+  HasNot: 
+    Fn::Equals: [ 'true', 'false' ]
+ 
+# dummy (null) resource, never created
+Resources:
+  NullResource:
+    Type: 'Custom::NullResource'
+    Condition: HasNot
+ 
+Outputs:
+  ExportsStackName:
+    Value: 
+      Ref: 'AWS::StackName'
+    Export:
+      Name: 
+        Fn::Sub: 'ExportsStackName-${AWS::StackName}'
