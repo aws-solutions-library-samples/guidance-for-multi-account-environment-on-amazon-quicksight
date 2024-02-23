@@ -35,8 +35,7 @@ REMAP_DS = os.environ['REMAP_DS']
 PIPELINE_NAME = os.environ['PIPELINE_NAME'] if 'PIPELINE_NAME' in os.environ else ''
 MODE = os.environ['MODE'] if 'MODE' in os.environ else 'INITIALIZE'
 
-
-DEPLOYMENT_DEV_ACCOUNT_ROLE_ARN = 'arn:aws:iam::{deployment_account_id}:role/DevAccountS3AccessRole'.format(deployment_account_id=DEPLOYMENT_ACCOUNT_ID)
+DEPLOYMENT_DEV_ACCOUNT_ROLE_ARN = 'arn:aws:iam::{deployment_account_id}:role/DevAccountS3AccessRole-QSCICD-{pipeline_name}'.format(deployment_account_id=DEPLOYMENT_ACCOUNT_ID, pipeline_name=PIPELINE_NAME)
 OUTPUT_DIR = '/tmp/output/'
 
 
@@ -714,7 +713,7 @@ def uploadFileToS3(bucket: str, filename: str, region: str, bucket_owner:str, pr
     try:
         s3.get_bucket_location(Bucket=bucket, ExpectedBucketOwner=bucket_owner)
     except ClientError as error:
-        print('The provided bucket doesn\'t belong to the expected account {account_id}'.format(account_id=bucket_owner))
+        print('The provided bucket {bucket} doesn\'t belong to the expected account {account_id}'.format(bucket=bucket, account_id=bucket_owner))
         return False
 
     # If S3 object_name was not specified, use zip_name
@@ -1189,6 +1188,12 @@ def generate_cloud_formation_override_list_AAB(analysisObj:QSAnalysisDef):
         'RefreshSchedules': RefreshScheduleOverridePropertiesList,
         'DataSources': DataSourceOverridePropertiesList        
     }
+    
+    if len(vpc_conn_arns) == 0:
+        del CloudFormationOverridePropertyConfiguration['VPCConnections']
+    
+    if len(refresh_schedules_arns) == 0:
+        del CloudFormationOverridePropertyConfiguration['RefreshSchedules']
 
     return CloudFormationOverridePropertyConfiguration
 
@@ -1224,7 +1229,7 @@ def replicate_dashboard_via_template(analysisObj:QSAnalysisDef, remap):
         for datasourceDefObj in datasetDefObj.dependingDSources:
             try:
                 dest_account_yaml = generateDataSourceCFN(datasourceDefObj=datasourceDefObj, appendContent=dest_account_yaml, remap=remap)
-            except ValueError as error:
+            except  Error as error:
                 print(error)
                 print('There was an issue creating the following datasource: {datasourceId} cannot proceed further'.format(datasourceId=datasourceDefObj.id))
                 return {
@@ -1333,9 +1338,6 @@ def lambda_handler(event, context):
     
     CONFIGURATION_FILES_PREFIX = '{pipeline_name}/ConfigFiles'
     ASSETS_FILES_PREFIX = '{pipeline_name}/CFNTemplates'    
-
-    if not calledViaEB and 'METHOD' not in event:
-        raise ValueError('A valid replication METHOD is required in the event object, supported METHOD are: TEMPLATE or ASSETS_AS_BUNDLE')
 
     replication_handler = None
 
