@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Cloudformation to deploy code pipeline and auxiliary assets for the Guidance for Multi-account Environments on Amazon QuickSight (SO9402)
+Description: Cloudformation to deploy pipeline for QS Multiaccount strategy
 
 Parameters:  
   DevelopmentAccountId:
@@ -262,10 +262,8 @@ Resources:
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/{AdministrationRoleName}
-                DeploymentTargets: !Ref DevelopmentAccountId
-                ExecutionRoleName: !Ref ExecutionRoleName               
-                PermissionModel: SELF_MANAGED
+                DeploymentTargets: !Ref DevelopmentAccountId                
+                PermissionModel: SERVICE_MANAGED
                 Regions: !Ref QuickSightRegion
                 StackSetName: !Sub ${PipelineName}-QSSourceAssets
                 TemplatePath: SourceAssetsArtifact::QStemplate_CFN_SOURCE.yaml
@@ -282,10 +280,8 @@ Resources:
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/{AdministrationRoleName}
                 DeploymentTargets: !Ref PreProdAccountId
-                ExecutionRoleName: !Ref ExecutionRoleName                
-                PermissionModel: SELF_MANAGED
+                PermissionModel: SERVICE_MANAGED
                 Regions: !Ref QuickSightRegion
                 StackSetName: !Sub ${PipelineName}-QSDestAssets
                 TemplatePath: DestAssetsArtifact::QS_assets_CFN_DEST.yaml

@@ -8,7 +8,9 @@ This guidance assets are designed to customers that want to build a multi accoun
 
 This solution details the architecture and steps needed to create a multi-account Amazon QuickSight environment using its API and additional services such as AWS CodePipeline, AWS Cloudformation, Amazon EventBridge and AWS Lambda to automate and orchestrate content promotion across environments (Amazon Quicksight accounts) to reduce operational overhead, auditability and approval steps to prevent non-reviewed changes to reach production environment.
 
-The solution assumes you already have an account setup with at least three AWS accounts plus an account used for deployment. This solution is implemented by a set of AWS resources that are deployed via CloudFormation. There are two different templates that need to be deployed one if your deployment account and the other one in the CI/CD first stage (typically DEV account)
+The solution assumes you already have an account setup with at least three AWS accounts plus an account used for deployment. This solution is implemented by a set of AWS resources that are deployed via CloudFormation. The accounts should belong to an AWS Organization and should be configured to operate with [CloudFormation StackSets using self managed permissions](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html). There are two different templates that need to be deployed one if your deployment account and the other one in the CI/CD first stage (typically DEV account)
+
+Looking forward to get started with the deployment of the solution? Below you can see a description of the solution, architecture and key concepts that are recommended to read before deployment, however if you want to skip them just move to the section named "Deploying the solution".
 
 ## Core concepts and terminology
 
@@ -39,7 +41,7 @@ These are the APIs supporting asset bundling and assets as code capabilities:
 
 These set of APIs while more powerful they are also more more oriented to perform large migrations of multiple assets and their dependencies allowing you to customize the migrated assets as needed (changing the definition programmatically) which is out of the scope of this use case (CI/CD migrating assets as they were defined).
 
-The solution supports using any of two different methods for promoting assets between accounts. [Templating](https://aws.amazon.com/blogs/big-data/migrate-amazon-quicksight-across-aws-accounts/) and [Assets as Bundle operations](https://aws.amazon.com/blogs/business-intelligence/automate-and-accelerate-your-amazon-quicksight-asset-deployments-using-the-new-apis/). The selection of the method to use can be parametrized in the pipeline so customers can choose the method that better aligns to their needs.
+The solution supports using any of two different methods for promoting assets between accounts. [Templating](https://aws.amazon.com/blogs/big-data/migrate-amazon-quicksight-across-aws-accounts/) and [Assets as Bundle operations](https://aws.amazon.com/blogs/business-intelligence/automate-and-accelerate-your-amazon-quicksight-asset-deployments-using-the-new-apis/). The selection of the method to use can be parametrized in the AWS Lambda function that generates the assets used by the deployment pipeline so customers can choose the method that better aligns to their needs.
 
 ### Terminology
 
@@ -52,15 +54,6 @@ Here you will find definition to specific terms that will be used throughout the
 * **Deployment account:** not to be confused with the term defined above. In this case the deployment account will be an AWS account that will host the resources and configuration needed to ensure CI/CD across the different deployment environments. As per the best practices defined in [AWS Environment Using Multiple Accounts whitepaper](https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/design-principles-for-your-multi-account-strategy.html) it should be hosted in a dedicated AWS account.
 * **Deployment pipeline:** Collection of automated processes designed to quickly and accurately move new code/assets additions from the source control to the various stages defined in the pipeline, where each stage represent a single development environment.
 * **Deployment Bucket:** S3 bucket belonging to the deployment account that will host the pipeline assets and the artifacts used by the pipeline to deploy your assets across the different stages.
-
-
-## Pre-requisites and assumptions
-
-* You have an environment with at least has 4 accounts (one for Deployment and then additional ones for the different stages. E.g. Dev, PRE and PRO)
-* You are [signed up](https://docs.aws.amazon.com/quicksight/latest/user/signing-up.html) to QuickSight Enterprise edition in the environment stages accounts
-* Data-sources in the Dev account *should be using secrets* for RDS, RDBMSs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
-* (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
-* Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). At the moment the use of [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is not supported.
 
 ## Architecture
 
@@ -95,7 +88,7 @@ Central piece of the solution that, from a centralized deployment account (that 
 
 #### CloudFormation:
 
-Infrastructure as code service that will be configured  as an action provider for the Codepipeline deploy actions, deploying assets in the pre-production and production accounts in  an efficient and scalable manner (updating only resources as needed and detecting changes). Two cloudformation templates by stage will be deployed
+Service that allows us to define our infrastructure as code. This service  will be configured  as an action provider for the Codepipeline deploy actions, deploying assets in the pre-production and production accounts in  an efficient and scalable manner (updating only resources as needed and detecting changes). Two cloudformation templates by stage will be deployed
 * **SourceAssets** If `TEMPLATE` was selected as deployment method, creates a [QuickSight Template](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-quicksight-template.html) from the analysis in the previous stage (e.g. Dev) that will be copied over the next one (e.g. PRE), this will be deployed in the *previous* environment as the stage deploying the assets (e.g. PRE stage will deploy SourceAssets in dev account). If `ASSETS_AS_BUNDLE` was selected as deployment method a dummy template with no resources is used to fit the placeholder in the CodePipeline.
 * **DestAssets** creates an analysis from the QuickSight template defined in SourceAssets and all the required assets (datasets, data-sources, refresh schedules) needed for it, this will be deployed in the same environment as the stage deploying the assets (e.g. PRE stage will deploy DestAssets in pre account)
 
@@ -107,11 +100,11 @@ As [QuickSight is integrated with EventBridge](https://aws.amazon.com/blogs/busi
 
 ### Architecture Diagram:
 
-#### Template as replication mode
+#### When Template is used as replication mode:
 
 ![](assets/Reference-architecture-diagram_template.png)
 
-#### Assets as Bundle as replication mode
+#### Wen Assets as Bundle is used as replication mode:
 
 ![](assets/Reference-architecture-diagram_AAaB.png)
 
@@ -119,7 +112,34 @@ As [QuickSight is integrated with EventBridge](https://aws.amazon.com/blogs/busi
 
 Solution assets will need to be deployed in two of the accounts, the first account that will be used in the CI/CD pipeline (typically this would be the **development account**) that will synthesize the QuickSight assets and the **deployment account** that will implement the CI/CD pipeline.
 
-### Deployment account assets
+### Pre-requisites and assumptions
+
+* You have an environment with at least has 4 accounts (one for Deployment and then additional ones for the different stages. E.g. Dev, PRE and PRO)
+* You are [signed up](https://docs.aws.amazon.com/quicksight/latest/user/signing-up.html) to QuickSight Enterprise edition in the environment stages accounts
+* Data-sources in the Dev account *should be using secrets* for RDS, RDBMSs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
+* (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
+* Your accounts are part of an [AWS Organization](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html) with [all features enabled](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_org_support-all-features.html).
+* You have stack-set configured within your AWS Organization and you have performed the steps to enable self-service operation, [refer to this guide to see the steps](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html#stacksets-prereqs-accountsetup). In case you have not completed these steps you will need to
+  * Create the AdministrationRole in the admin account using the toggle option in deploymentAccount_template.yaml template 
+  * Create the ExecutionRole **in each of the stages accounts**, you can use the provided AWSCloudFormationStackSetExecutionRole.yml stack for this.
+* Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). At the moment the use of [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is not supported when using CloudFormation StackSet operations in CodePipeline.
+
+This solution requires (at least) do deploy two CloudFormation stacks:
+
+1. deploymentAccount_template.yaml that should be deployed on the _Deployment account_
+1. firstStageAccount_template.yaml that should be deployed on the _Development account_
+
+The stack files can be found under deployment/CFNStacks/ directory in this Solution Package.
+
+If you don't have your Organization member accounts configured to operate in self-managed mode with CloudFormation StackSets you will also need to deploy the AWSCloudFormationStackSetExecutionRole.yml template **in all the AWS accounts where you have pipeline stages**. The template can be found in the deployment/CFNStacks/ folder.
+
+### Solution limitations
+
+* At the moment the Pipeline supports the continouus deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and sythesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
+* When using `TEMPLATE` as replication method, supported datasources are RDS, Redshift, S3 and Athena
+* When using `ASSETS_AS_BUNDLE` as replication method, all the datasources are supported excepting the ones [listed here](https://docs.aws.amazon.com/quicksight/latest/developerguide/asset-bundle-ops.html). Also uploaded file datasources are not supported.
+
+### Deploying _Deployment account_ assets
 
 The deployment account will need to have the following assets deployed:
 
@@ -129,60 +149,67 @@ The deployment account will need to have the following assets deployed:
 * CodePipeline role to be used for executing the different actions in the pipeline
 * [EventBridge rule](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html) that will detect changes in the S3 prefix configured for CloudFormation artifacts and will trigger the pipeline
 * EventBridge role that will be used in the aforementioned EventBridge rule. This role should have permissions to start the pipeline mentioned earlier
+* (Optional) [AdministrationRole to be used by StackSet operations](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html#stacksets-prereqs-accountsetup) to deploy in the staging AWS accounts (this is only needed if you haven't configured IAM delegated access for StackSet operations in your organization yet.)
 
-The deployment of these assets can be done by just deploying the deploymentAccount_template.yaml CloudFormation template present in the deployment/CFNStacks directory from this repository.
+The deployment of these assets can be done by just deploying the deploymentAccount_template.yaml CloudFormation template present in the deployment/CFNStacks directory from this repository. For convenience default values were provided for most of the parameters.
 
 #### Template Parameters
 
-|Parameter name|Description|Type|
-| ---- | ---- | ---- |
-|DeploymentAccountId|Account ID for deployment pipeline|String|
-|DevelopmentAccountId|Account ID hosting for development environment|String|
-|PreProdAccountId|Account ID hosting for pre-production environment|String|
-|ProdAccountId|Account ID hosting for production environment|String|
-|PipelineS3BucketName|S3 Bucket to use for pipeline assets|String|
-|S3Region|Region where the S3 bucket will be hosted|String|
-|QuickSightRegion|Region where QuickSight assets are hosted|String|
-|SrcQSAdminRegion|Admin region for your QS source account where your users are hosted|String|
-|DestQSAdminRegion|Admin region for your QS destination account where your users are hosted|String|
-|AccountAdmin|IAM Username that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption)git |String|
-|QSUser|QS Username in Account where the assets will be created|String|
-|Stage1Name|Name of the first stage in the pipeline, e.g. DEV|String|
-|Stage2Name|Name of the first stage in the pipeline, e.g. PRE|String|
-|Stage3Name|Name of the first stage in the pipeline, e.g. PRO|String|
-|AssumeRoleExtId|Ext ID to be used in when assuming the IAM role in the development account|String|
-|PipelineName|Name for the Code Pipeline that will be created|String|
-|ApprovalEmail|Email that you want to be notified for the prod approval phase|String|
-|CreateBucket|Decide if pipeline bucket should be created|String|
+|Parameter name|Description|Type|Default Value|
+| ---- | ---- | ---- |---- |
+|DevelopmentAccountId|Account ID hosting for development environment|String| User defined|
+|PreProdAccountId|Account ID hosting for pre-production environment|String| User defined|
+|ProdAccountId|Account ID hosting for production environment|String| User defined|
+|PipelineS3BucketName|S3 Bucket to use for pipeline assets|String| qs-pipeline-bucket |
+|S3Region|Region where the S3 bucket will be hosted|String| us-east-1 |
+|QuickSightRegion|Region where QuickSight assets are hosted|String|  us-east-1 |
+|SrcQSAdminRegion|Admin region for your QS source account where your users are hosted|String|  us-east-1 |
+|DestQSAdminRegion|Admin region for your QS destination account where your users are hosted|String| us-east-1 |
+|AccountAdmin|IAM ARN that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption). Eg your role/user arn |String| User defined|
+|QSUser|QS Username in Account where the assets will be created|String| User defined|
+|Stage1Name|Name of the first stage in the pipeline, e.g. DEV|String| DEV |
+|Stage2Name|Name of the first stage in the pipeline, e.g. PRE|String| PRE |
+|Stage3Name|Name of the first stage in the pipeline, e.g. PRO|String| PRO |
+|AssumeRoleExtId|IAM external ID to be used in when assuming the IAM role in the development account. [Refer to this link](https://a.co/47mgPwV) for more details|String| qsdeppipeline |
+|PipelineName|Name for the Code Pipeline that will be created|String|  QSCICDPipeline|
+|ApprovalEmail|Email that you want to be notified for the prod approval phase|String| user@domain.com|
+|AdministrationRoleName|The name of the administration role. Defaults to 'AWSCloudFormationStackSetAdministrationRole'.|String| AWSCloudFormationStackSetAdministrationRole|
+|ExecutionRoleName|The name of the execution role that can assume this role. Defaults to 'AWSCloudFormationStackSetExecutionRole'.|String| AWSCloudFormationStackSetExecutionRole|
+|CreateBucket|Decide if pipeline bucket should be created|String| TRUE|
+|CreateAdmRole|Whether or not the Admin role for self managed stack set operations should be created, choose NO if your admin account already have this role created, [more info here](https://a.co/e6M6aMV). Remember that you will need to deploy the provided AWSCloudFormationStackSetExecutionRole.yml stack in ALL the stage accounts|String| TRUE|
 
-### Pipeline first stage account assets
+### Deploying _Development a.k.a. first stage account_ assets
 
-The first stage account in our CI/CD pipeline will need to have the following assets deployed
+The first stage account in our CI/CD pipeline will need to have the following assets deployed. 
 
-* Lambda function (QSAssetsCFNSynthesizer), this lambda function will be responsible for synthesizing the QuickSight assets (a given dashboard and all its dependencies) to create CloudFormation templates and configuration files (to parametrize these templates for each environment) and package them as [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) that can be used by the CodePipeline defined in the deployment account. 
+* Lambda function (QSAssetsCFNSynthesizer), this lambda function will be responsible for synthesizing the QuickSight assets (a given dashboard and all its dependencies) to create CloudFormation templates and configuration files (to parametrize these templates for each environment) and package them as [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) that can be used by the CodePipeline defined in the deployment account. The zip code of the lambda is available at lambda/layer/qs_assets_CFN_synthesizer.zip. It will need to be uploaded to one of your buckets and be referenced in the CloudFormation template below.
 * IAM Role to be used in the Lambda function as execution role. This role will have permissions to execute the QuickSight API calls needed to describe the assets that will be synthesized
-* Lambda layer containing 
+* Lambda layer containing (zip is already created and available in  source/layer/lambdaLayerBotoYAML.zip). It will need to be uploaded to one of your buckets and be referenced in the CloudFormation template below.
   * [PyYaml python package](https://pypi.org/project/PyYAML/) needed to generate the CloudFormation templates as YAML files
   * Up to date [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) package as some of the new QuickSight API methods are not yet available in the version deployed in Python lambda
 * [EventBridge rule](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html) that will trigger the Lambda synthesizer function each time a new QuickSight dashboard is published
 
-|Parameter name|Description|Type|
-| ---- | ---- | ---- |
-|DeploymentAccountId|Account ID used for the deployment pipelines|String|
-|DeploymentS3Bucket|S3 Bucket to use for pipeline assets|String|
-|AssumeRoleExtId|Ext ID to be used in when assuming the IAM role in the development account|String|    
-|QuickSightRegion|Region where QuickSight assets are hosted|String|   
-|DeploymentS3Region|Region where the deployment (CI/CD) bucket resides|String|    
-|SourceQSUser|Source stage username to use to retrieve QS assets|String|    
-|DestQSUser|Dest stage username to use to share the created QS assets with|String|    
-|SourceCodeS3Bucket|S3 Bucket containing the code|String|
-|SourceCodeKey| Key within S3 Bucket that contains the zipped code| String|
-|LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries| String|
-|StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String|
-|DashboardId| Dashboard ID in development you want to track changes for   | String|
-|ReplicationMethod| Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)| String - AllowedValues are TEMPLATE/ASSETS_AS_BUNDLE
-|RemapDS | Whether or not to remap the data sources connection properties in the dashboard datasets (when using templates) or supported properties when using Assets As Bundle (more info here https://a.co/jeHZkOr)| String (YES/NO)
-|PipelineName | Name of the Code Pipeline whose source assets this lambda will be contributing to | String|  
+ For convenience default values were provided for most of the parameters
+
+|Parameter name|Description|Type|Default Value|
+| ---- | ---- | ---- |---- |
+|DeploymentAccountId|Account ID used for the deployment pipelines|String| User defined|
+|DeploymentS3Bucket|S3 Bucket to use for pipeline assets|String| qs-pipeline-bucket |
+|AssumeRoleExtId|Ext ID to be used in when assuming the IAM role in the development account|String| qsdeppipeline |
+|QuickSightRegion|Region where QuickSight assets are hosted|String|  us-east-1|
+|DeploymentS3Region|Region where the deployment (CI/CD) bucket resides|String| us-east-1|   
+|SourceQSUser|Source stage username to use to retrieve QS assets|String| User defined|
+|DestQSUser|Dest stage username to use to share the created QS assets with|String| User defined|
+|SourceCodeS3Bucket|S3 Bucket containing the code|String|  User defined|
+|SourceCodeKey| Key within S3 Bucket that contains the zipped code| String| User defined|
+|LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries| String| User defined|
+|StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String| DEV, PRE, PRO|
+|DashboardId| Dashboard ID in development you want to track changes for   | String|  User defined|
+|ReplicationMethod| Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)| String - AllowedValues are TEMPLATE/ASSETS_AS_BUNDLE| ASSETS_AS_BUNDLE|
+|RemapDS | Whether or not to remap the data sources connection properties in the dashboard datasets (when using templates) or supported properties when using Assets As Bundle (more info here https://a.co/jeHZkOr)| String (YES/NO)| YES|
+|PipelineName | Name of the Code Pipeline whose source assets this lambda will be contributing to | String| QSCICDPipeline|
+
+
 
 ## Using the solution
 
@@ -192,6 +219,7 @@ In order to do so you just need to follow this procedure:
 
 1. [*In your Development account*] Identify the asset (the QuickSight dashboard) that you wan to promote to the next development stage, ensure that this ID matches the one configured in the synthesizer Lambda function as an environment variable
 1. Ensure that the accounts from subsequent stages are subscribed to QuickSight Enterprise edition.
+1. Ensure the AWSCloudFormationStackSetExecutionRole exists in all the stages AWS Accounts. You can [check this by opening this page in IAM](https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/roles/details/AWSCloudFormationStackSetExecutionRole?section=permissions) **in each of the deployment accounts**.
 1. If your dashboard uses data-sources that require a user and a password for authentication, make sure you configure these to make use of AWS Secrets Manager instead of user credentials, [more info here](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html). Create secrets in all the accounts from subsequent stages. 
 1. (only when using `TEMPLATE` as deployment method) If your dashboard uses data-sources that require a [VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html) make sure that an equivalent VPC connection is already configured on all the accounts from subsequent stages.
 1. [*In your Development account*] Choose the desired deployment method `TEMPLATE` or `ASSETS_AS_BUNDLE`. This is controlled via the *REPLICATION_METHOD* Lambda environment variable (set to `ASSETS_AS_BUNDLE` by default)
@@ -271,6 +299,26 @@ In order to do so you just need to follow this procedure:
 7. [*In your Deployment account*] Check the pipeline execution and the deployment in your second stage (typically PRE), once the deployment is complete navigate to the quicksight  console in your region to see the deployed analysis.
 7. [*In your Deployment account*] Once you have validated the analysis in the first stage (PRE) you may go back to the pipeline and decide whether or not you want to approve the change so it reaches the second stage (typically PRO)
 7. After changes have been approved you should be able to see the deployment started that will progress your changes to PRO
+
+## FAQ/Troubleshooting
+
+### Problem
+
+Cloudformation StackSets fail to deploy in the target accounts
+
+### Solution
+
+The relevant IAM Roles are not existing in the DeploymentAccount (AWSCloudFormationStackSetAdministrationRole) and/or AWSCloudFormationStackSetExecutionRole (in each of the stages accounts). Also ensure that the roles are properly configured in the CodePipeline deployment stages, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-StackSets.html#action-reference-StackSet-config).
+
+### Problem
+
+Code Pipeline source (S3) action shows as failed after deploying the deploymentAccount_template.yaml
+
+### Solution
+
+This is expected as by default, a pipeline starts automatically when it is created and any time a change is made in a source repository. As the S3 source repository is empty when the pipeline is created it is normal to have the first stage marked as _failed_ until the first execution of the QSAssetsCFNSynthesizer (using _DEPLOY_ mode) is made.
+
+
 
 ## Security
 

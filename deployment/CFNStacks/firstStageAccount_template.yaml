@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Cloudformation template to build assets to used in the QuickSight multi-account Solution. In particular the assets present on the environments account
+Description: Cloudformation template to build assets to used in the Guidance for Multi-account Environments on Amazon QuickSight Solution (SO9402). In particular the assets present on the environments account
          
 Parameters:  
   DeploymentAccountId:
@@ -9,16 +9,20 @@ Parameters:
   DeploymentS3Bucket:
     Description: S3 Bucket to use for pipeline assets
     Type: String
-    AllowedPattern: "^[0-9a-z\\.-]{3,63}"    
+    AllowedPattern: "^[0-9a-z\\.-]{3,63}"
+    Default: "qs-pipeline-bucket" 
   AssumeRoleExtId:
     Description: Ext ID to be used in when assuming the IAM role in the development account
-    Type: String    
+    Type: String
+    Default: qsdeppipeline
   QuickSightRegion:
     Description: Region where QuickSight assets are hosted
-    Type: String   
+    Type: String
+    Default: "us-east-1"
   DeploymentS3Region:
     Description: Region where the deployment (CI/CD) bucket resides
-    Type: String    
+    Type: String
+    Default: "us-east-1"
   SourceQSUser:
     Description: Source stage username to use to retrieve QS assets
     Type: String    
@@ -61,6 +65,7 @@ Parameters:
   PipelineName:
     Description: Name of the Code Pipeline whose source assets this lambda will be contributing to
     Type: String
+    Default: QSCICDPipeline
     
 
 Resources: 
@@ -74,7 +79,7 @@ Resources:
       Description: >
         Lambda function that describe resources in a source account and synthesizes a CFN template that is zipped and stored in the deployment account so 
         codepipeline can take them as input and deploy it across the envs (DEV, PRE, PRO)
-      FunctionName: QSAssetsCFNSynthesizer
+      FunctionName:  !Sub QSAssetsCFNSynthesizer-${PipelineName}
       Handler: createTemplateFromAnalysis.lambda_handler
       MemorySize: 128
       Role: !GetAtt QSlambdaExecRole.Arn
@@ -111,6 +116,7 @@ Resources:
             !Ref PipelineName
           MODE:
             INITIALIZE
+          
       Code:
         S3Bucket: !Ref SourceCodeS3Bucket
         S3Key: !Ref SourceCodeKey
@@ -121,10 +127,10 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction      
-      FunctionName: QSAssetsCFNSynthesizer      
+      FunctionName: !Sub QSAssetsCFNSynthesizer-${PipelineName}
       Principal: events.amazonaws.com
       SourceArn :
-        Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/QuickSightDashboardUpdateRule   
+        Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/QuickSightDashboardUpdateRule-${PipelineName}-Rule
       
   QSlambdaExecRole:
     Type: AWS::IAM::Role
@@ -166,7 +172,7 @@ Resources:
             - Action: sts:AssumeRole
               Effect: Allow
               Resource: 
-                - !Join ["", ["arn:aws:iam::", !Ref DeploymentAccountId, ":role/DevAccountS3AccessRole"]]
+                - !Sub arn:aws:iam::${DeploymentAccountId}:role/DevAccountS3AccessRole-QSCICD-${PipelineName}
               Sid: 3
             - Action: 
               - quicksight:DescribeDashboard              
@@ -203,13 +209,13 @@ Resources:
       Content: 
         S3Bucket: !Ref SourceCodeS3Bucket
         S3Key: !Ref LayerCodeKey  
-      Description: Layer containing up to date boto3 package and PyYAML needed by QSAssetsCFNSynthesizer function
-      LayerName: QSAssetsCFNSynthesizer
+      Description: !Sub "Layer containing up to date boto3 package and PyYAML needed by QSAssetsCFNSynthesizer-${PipelineName} function"
+      LayerName:  !Sub QSAssetsCFNSynthesizer-${PipelineName}-Layer
   
   eventRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: QuickSightDashboardUpdateRule
+      Name: !Sub QuickSightDashboardUpdateRule-${PipelineName}-Rule
       Description: Rule that triggers when a particular dashboard is updated
       EventPattern:
         source:
@@ -220,7 +226,7 @@ Resources:
       Targets:
       - 
         Arn: !GetAtt lambdaFunction.Arn
-        Id: QSAssetsCFNSynthesizerTarget        
+        Id: !Sub QSAssetsCFNSynthesizer-${PipelineName}-Target        
       
 Outputs:
   LambdaFunction:
