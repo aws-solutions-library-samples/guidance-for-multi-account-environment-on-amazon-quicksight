@@ -319,6 +319,13 @@ Code Pipeline source (S3) action shows as failed after deploying the deploymentA
 This is expected as by default, a pipeline starts automatically when it is created and any time a change is made in a source repository. As the S3 source repository is empty when the pipeline is created it is normal to have the first stage marked as _failed_ until the first execution of the QSAssetsCFNSynthesizer (using _DEPLOY_ mode) is made.
 
 
+### Problem
+
+When executing my pipeline I get the following error: Datasource XXXX (ID YYY ) is an RDS datasource and it is not configured with a secret, cannot proceed
+
+### Solution
+
+When you use RDBMs datasources in QuickSight (e.g. RDS, Redshift) they require you to provide a user and a password for the connection. QuickSight allows you to define the user and password directly on the QuickSight console when creating your dataset but for security reasons the user and the password cannot be retrieved programmatically. This prevents the solution automation to replicate your assets across environments. In order to overcome this QuickSight integrates with [Secrets Manager](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html) to securely store and manage access to your database credentials. As a requisite you need to store your database credentials as secrets in secret manager ([see requisite 3. in the list of pre-requisites](#pre-requisites-and-assumptions)).
 
 ## Security
 
