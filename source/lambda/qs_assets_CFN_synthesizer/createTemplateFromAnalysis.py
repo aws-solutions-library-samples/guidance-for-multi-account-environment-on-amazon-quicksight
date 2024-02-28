@@ -1278,7 +1278,7 @@ def replicate_dashboard_via_AAB(analysisObj:QSAnalysisDef, remap):
     if remap:
         CloudFormationOverridePropertyConfiguration = generate_cloud_formation_override_list_AAB(analysisObj=analysisObj)   
         ret = qs.start_asset_bundle_export_job (AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AssetBundleExportJobId=EXPORT_JOB_ID, ResourceArns=resourceArns, IncludeAllDependencies=True, 
-                                      ExportFormat='CLOUDFORMATION_JSON', CloudFormationOverridePropertyConfiguration=CloudFormationOverridePropertyConfiguration, ValidationStrategy={'StrictModeForAllResources':False})
+                                      ExportFormat='CLOUDFORMATION_JSON', CloudFormationOverridePropertyConfiguration=CloudFormationOverridePropertyConfiguration)
     else:
         ret = qs.start_asset_bundle_export_job (AwsAccountId=SOURCE_AWS_ACCOUNT_ID, AssetBundleExportJobId=EXPORT_JOB_ID, ResourceArns=resourceArns, IncludeAllDependencies=True, 
                                       ExportFormat='CLOUDFORMATION_JSON', ValidationStrategy={'StrictModeForAllResources':False})

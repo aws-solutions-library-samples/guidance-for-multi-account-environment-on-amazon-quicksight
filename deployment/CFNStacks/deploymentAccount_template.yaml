@@ -114,7 +114,7 @@ Resources:
               - sts:AssumeRole
       Path: /
       Policies:
-        - PolicyName: !Sub AssumeRole-{ExecutionRoleName}
+        - PolicyName: !Sub AssumeRole-${ExecutionRoleName}
           PolicyDocument:
             Version: 2012-10-17
             Statement:
@@ -122,7 +122,7 @@ Resources:
                 Action:
                   - sts:AssumeRole
                 Resource:
-                  - !Sub 'arn:*:iam::*:role/{ExecutionRoleName}'
+                  - !Sub 'arn:*:iam::*:role/${ExecutionRoleName}'
   pipelineS3Bucket:
     Type: AWS::S3::Bucket
     Condition: CreateBucketCondition
