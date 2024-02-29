@@ -262,7 +262,7 @@ Resources:
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/{AdministrationRoleName}
+                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
                 DeploymentTargets: !Ref DevelopmentAccountId
                 ExecutionRoleName: !Ref ExecutionRoleName               
                 PermissionModel: SELF_MANAGED
@@ -282,7 +282,7 @@ Resources:
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/{AdministrationRoleName}
+                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
                 DeploymentTargets: !Ref PreProdAccountId
                 ExecutionRoleName: !Ref ExecutionRoleName                
                 PermissionModel: SELF_MANAGED
@@ -417,7 +417,7 @@ Resources:
             Effect: Allow
             Resource: 
               - !GetAtt CodePipelineRole.Arn
-              - !Sub arn:aws:iam::${AWS::AccountId}:role/{AdministrationRoleName}
+              - !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
           - Action:
             - cloudwatch:*
             Effect: Allow

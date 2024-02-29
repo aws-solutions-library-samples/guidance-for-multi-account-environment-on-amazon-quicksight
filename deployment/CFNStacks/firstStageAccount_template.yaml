@@ -34,11 +34,11 @@ Parameters:
     Type: String
     AllowedPattern: "^[0-9a-z\\.-]{3,63}"    
   SourceCodeKey:
-    Description: Key within S3 Bucket that contains the zipped code
+    Description: Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthezizer folder.
     Type: String
     AllowedPattern: "^[0-9a-zA-Z\\/\\-_]+\\.zip"    
   LayerCodeKey:
-    Description: Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries
+    Description: Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries. For your convenience you have the source code zipped in the solution under source/lambda/layer folder.
     Type: String
     AllowedPattern: "^[0-9a-zA-Z\\/\\-_]+\\.zip"    
   StageNames:

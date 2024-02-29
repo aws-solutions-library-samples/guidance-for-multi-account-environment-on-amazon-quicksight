@@ -116,12 +116,14 @@ Solution assets will need to be deployed in two of the accounts, the first accou
 
 * You have an environment with at least has 4 accounts (one for Deployment and then additional ones for the different stages. E.g. Dev, PRE and PRO)
 * You are [signed up](https://docs.aws.amazon.com/quicksight/latest/user/signing-up.html) to QuickSight Enterprise edition in the environment stages accounts
-* Data-sources in the Dev account *should be using secrets* for RDS, RDBMSs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
-* (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
-* Your accounts are part of an [AWS Organization](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html) with [all features enabled](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_org_support-all-features.html).
-* You have stack-set configured within your AWS Organization and you have performed the steps to enable self-service operation, [refer to this guide to see the steps](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html#stacksets-prereqs-accountsetup). In case you have not completed these steps you will need to
+* Your accounts are part of an [AWS Organization](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html) with [all features enabled](https://docs.aws.amazon.com/organizations/latest/userguide/
+* You have [CloudFormation StackSets](https://us-east-1.console.aws.amazon.com/organizations/v2/home/services/CloudFormation%20StackSets) service configured within your AWS Organization and you have performed the steps to enable self-service operation, [refer to this guide to see the steps](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html#stacksets-prereqs-accountsetup). In case you have not completed these steps you will need to
+  * Enable [CloudFormation StackSets](https://us-east-1.console.aws.amazon.com/organizations/v2/home/services/CloudFormation%20StackSets) service in the AWS Organizations service console.
   * Create the AdministrationRole in the admin account using the toggle option in deploymentAccount_template.yaml template 
   * Create the ExecutionRole **in each of the stages accounts**, you can use the provided AWSCloudFormationStackSetExecutionRole.yml stack for this.
+* Data-sources in the Dev account *should be using secrets* for RDS, RDBMSs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
+* (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
+orgs_manage_org_support-all-features.html).
 * Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). At the moment the use of [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is not supported when using CloudFormation StackSet operations in CodePipeline.
 
 This solution requires (at least) do deploy two CloudFormation stacks:
@@ -152,6 +154,8 @@ The deployment account will need to have the following assets deployed:
 * (Optional) [AdministrationRole to be used by StackSet operations](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-prereqs-self-managed.html#stacksets-prereqs-accountsetup) to deploy in the staging AWS accounts (this is only needed if you haven't configured IAM delegated access for StackSet operations in your organization yet.)
 
 The deployment of these assets can be done by just deploying the deploymentAccount_template.yaml CloudFormation template present in the deployment/CFNStacks directory from this repository. For convenience default values were provided for most of the parameters.
+
+**IMPORTANT NOTE:** Ensure [CloudFormation StackSets integration](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets) is enabled and your account is configured to operate with Stack Sets as mentioned in [requisite 4. in the list of pre-requisites](#pre-requisites-and-assumptions).
 
 #### Template Parameters
 
@@ -201,8 +205,8 @@ The first stage account in our CI/CD pipeline will need to have the following as
 |SourceQSUser|Source stage username to use to retrieve QS assets|String| User defined|
 |DestQSUser|Dest stage username to use to share the created QS assets with|String| User defined|
 |SourceCodeS3Bucket|S3 Bucket containing the code|String|  User defined|
-|SourceCodeKey| Key within S3 Bucket that contains the zipped code| String| User defined|
-|LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries| String| User defined|
+|SourceCodeKey| Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthezizer folder| String| User defined|
+|LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries. For your convenience you have the source code zipped in the solution under source/lambda/layer folder| String| User defined|
 |StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String| DEV, PRE, PRO|
 |DashboardId| Dashboard ID in development you want to track changes for   | String|  User defined|
 |ReplicationMethod| Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)| String - AllowedValues are TEMPLATE/ASSETS_AS_BUNDLE| ASSETS_AS_BUNDLE|
@@ -304,11 +308,11 @@ In order to do so you just need to follow this procedure:
 
 ### Problem
 
-Cloudformation StackSets fail to deploy in the target accounts
+Cloudformation StackSets fail to deploy in the target accounts with an error similar to ```Account XXXXXXXXXX should have 'AWSCloudFormationStackSetExecutionRole' role with trust relationship to Role 'AWSCloudFormationStackSetAdministrationRole'.```
 
 ### Solution
 
-The relevant IAM Roles are not existing in the DeploymentAccount (AWSCloudFormationStackSetAdministrationRole) and/or AWSCloudFormationStackSetExecutionRole (in each of the stages accounts). Also ensure that the roles are properly configured in the CodePipeline deployment stages, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-StackSets.html#action-reference-StackSet-config).
+The relevant IAM Roles are not existing in the DeploymentAccount (AWSCloudFormationStackSetAdministrationRole) and/or AWSCloudFormationStackSetExecutionRole (in each of the stages accounts). Also ensure that the roles are properly configured in the CodePipeline deployment stages, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-StackSets.html#action-reference-StackSet-config). Also ensure that [CloudFormation StackSets](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets) is enabled in Organizations. Once fixed you can retry the failed actions in the Stage.
 
 ### Problem
 
@@ -325,7 +329,15 @@ When executing my pipeline I get the following error: Datasource XXXX (ID YYY ) 
 
 ### Solution
 
-When you use RDBMs datasources in QuickSight (e.g. RDS, Redshift) they require you to provide a user and a password for the connection. QuickSight allows you to define the user and password directly on the QuickSight console when creating your dataset but for security reasons the user and the password cannot be retrieved programmatically. This prevents the solution automation to replicate your assets across environments. In order to overcome this QuickSight integrates with [Secrets Manager](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html) to securely store and manage access to your database credentials. As a requisite you need to store your database credentials as secrets in secret manager ([see requisite 3. in the list of pre-requisites](#pre-requisites-and-assumptions)).
+When you use RDBMs datasources in QuickSight (e.g. RDS, Redshift) they require you to provide a user and a password for the connection. QuickSight allows you to define the user and password directly on the QuickSight console when creating your dataset but for security reasons the user and the password cannot be retrieved programmatically. This prevents the solution automation to replicate your assets across environments. In order to overcome this QuickSight integrates with [Secrets Manager](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html) to securely store and manage access to your database credentials. As a requisite you need to store your database credentials as secrets in secret manager ([see requisite 5. in the list of pre-requisites](#pre-requisites-and-assumptions)).
+
+### Problem
+
+When executing changes in the pipeline not all the changes are deployed in order, if I summit a new change while the pipeline is still deploying the previous one (or pending approval to get to the last stage) a newer change can overtake a previous one.
+
+### Solution 
+
+This is expected when Code Pipeline works in SUPERSEDED mode, where the pipelines is able to process multiple executions at the same time. Each execution is run through the pipeline separately. The pipeline processes each execution in order and might supersede an earlier execution with a later one. The following rules are used to process executions in a pipeline for SUPERSEDED mode, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions). If you want your pipeline to lock stages when an execution is being processed so waiting executions do not overtake executions that have already started you might want to take a look to the [QUEUED mode here.](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions-queued). You can change the pipeline mode according to your needs, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/execution-modes.html).
 
 ## Security
 
