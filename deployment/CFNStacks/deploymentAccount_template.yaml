@@ -122,7 +122,9 @@ Resources:
                 Action:
                   - sts:AssumeRole
                 Resource:
-                  - !Sub 'arn:*:iam::*:role/${ExecutionRoleName}'
+                  - !Sub 'arn:*:iam::${DevelopmentAccountId}:role/${ExecutionRoleName}'
+                  - !Sub 'arn:*:iam::${PreProdAccountId}:role/${ExecutionRoleName}'
+                  - !Sub 'arn:*:iam::${ProdAccountId}:role/${ExecutionRoleName}'
   pipelineS3Bucket:
     Type: AWS::S3::Bucket
     Condition: CreateBucketCondition
@@ -175,7 +177,7 @@ Resources:
               kms:ViaService: sns.us-east-1.amazonaws.com
           Effect: Allow
           Principal:
-            AWS: '*'
+            AWS: !GetAtt CodePipelineRole.Arn
           Resource: '*'
         - Sid: Allow administration of the key
           Effect: Allow
