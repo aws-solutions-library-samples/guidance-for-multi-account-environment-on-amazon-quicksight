@@ -110,7 +110,7 @@ As [QuickSight is integrated with EventBridge](https://aws.amazon.com/blogs/busi
 
 ## Deploying the solution
 
-Solution assets will need to be deployed in two of the accounts, the first account that will be used in the CI/CD pipeline (typically this would be the **development account**) that will synthesize the QuickSight assets and the **deployment account** that will implement the CI/CD pipeline.
+Solution assets will need to be deployed in two of the accounts, the first account that will be used in the CI/CD pipeline (typically this would be the **development account**) that will synthesize the QuickSight assets and the **deployment account** that will implement the CI/CD pipeline. As the CloudFormation stacks that implement this solution contain a considerable number of parameters a helper script (deploy.py) is provided so you can quickly configure and deploy the solution. Refer to the [Preparing deployment using helper script section](#preparing-deployment-using-the-helper-script) for more details.
 
 ### Pre-requisites and assumptions
 
@@ -135,11 +135,27 @@ The stack files can be found under deployment/CFNStacks/ directory in this Solut
 
 If you don't have your Organization member accounts configured to operate in self-managed mode with CloudFormation StackSets you will also need to deploy the AWSCloudFormationStackSetExecutionRole.yml template **in all the AWS accounts where you have pipeline stages**. The template can be found in the deployment/CFNStacks/ folder.
 
-### Solution limitations
+### Preparing deployment using the helper script
 
-* At the moment the Pipeline supports the continouus deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and sythesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
-* When using `TEMPLATE` as replication method, supported datasources are RDS, Redshift, S3 and Athena
-* When using `ASSETS_AS_BUNDLE` as replication method, all the datasources are supported excepting the ones [listed here](https://docs.aws.amazon.com/quicksight/latest/developerguide/asset-bundle-ops.html). Also uploaded file datasources are not supported.
+Under the root folder of this solution you can find a python script that helps you to customize the cloudformation templates that implement the solution with your environment values and also uploads the template and the lambda code to an S3 bucket so you can deploy it with one click. Notice that in order to support one click deployment with the script you need to provide a valid S3 bucket you have write access to and this bucket needs to have static webhosting with public access enabled.
+
+#### Using the script
+
+The script takes a number of parameters (some of them are optional) to set the default values of the CloudFormation templates in accordance with your needs, then the script uploads both the CloudFormation templates and the code files referenced by them to create the Lamba function to your bucket and then provides three links, one to be used in the _Deployment account_, one to be used in the _Development a.k.a. first stage account_ and another one to be used in each of the development stages accounts in case you need to create the IAM role to implement delegated access for the AWS CloudFormation Stack Sets operations.
+
+NOTE: The helper script uses [PyYAML](https://pypi.org/project/PyYAML/) library which is not part of the Python Standard libraries so you might need to install it, you can to it easiyl by executing ```pip install pyyaml```
+
+Now, you can check the parameters supported by the script by executing:
+
+```
+python deploy.py -h
+```
+
+Below you can find an execution example for the script:
+
+```
+python deploy.py --bucket <your_bucket_to_host_code_and_templates> --template_prefix templates --code_prefix code --bucket_region us-east-1 --deployment_account_id <your_deployment_account_id> --development_account_id <your_development_account_id>  --prepro_account_id <your_prepro_account_id>  --production_account_id <your_production_account_id>  --pipeline_name QSCICDPipeline --quicksight_user <valid_QS_user_name> --dashboard_id <dashboard_id_you_want_to_replicate>
+```
 
 ### Deploying _Deployment account_ assets
 
@@ -158,6 +174,8 @@ The deployment of these assets can be done by just deploying the deploymentAccou
 **IMPORTANT NOTE:** Ensure [CloudFormation StackSets integration](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets) is enabled and your account is configured to operate with Stack Sets as mentioned in [requisite 4. in the list of pre-requisites](#pre-requisites-and-assumptions).
 
 #### Template Parameters
+
+Remember that you can use the deployment helper script to customize the template according to your environment and then easily deploy the stack. Refer to the [Preparing deployment using helper script section](#preparing-deployment-using-the-helper-script) for more details.
 
 |Parameter name|Description|Type|Default Value|
 | ---- | ---- | ---- |---- |
@@ -186,14 +204,16 @@ The deployment of these assets can be done by just deploying the deploymentAccou
 
 The first stage account in our CI/CD pipeline will need to have the following assets deployed. 
 
-* Lambda function (QSAssetsCFNSynthesizer), this lambda function will be responsible for synthesizing the QuickSight assets (a given dashboard and all its dependencies) to create CloudFormation templates and configuration files (to parametrize these templates for each environment) and package them as [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) that can be used by the CodePipeline defined in the deployment account. The zip code of the lambda is available at lambda/layer/qs_assets_CFN_synthesizer.zip. It will need to be uploaded to one of your buckets and be referenced in the CloudFormation template below.
+* Lambda function (QSAssetsCFNSynthesizer), this lambda function will be responsible for synthesizing the QuickSight assets (a given dashboard and all its dependencies) to create CloudFormation templates and configuration files (to parametrize these templates for each environment) and package them as [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) that can be used by the CodePipeline defined in the deployment account. The code of the lambda is available at lambda/qs_assets_CFN_synthesizer/. You will need to package it in a zip using the aforementioned directory as base directory and  upload it to one of your buckets so it can be referenced in the CloudFormation template below. Alternatively you can use the deploy.py script to package and upload the code (and Cloud Formation templates) to S3 on your behalf, refer to the [Preparing deployment using the helper script section](#preparing-deployment-using-the-helper-script) for more details.
 * IAM Role to be used in the Lambda function as execution role. This role will have permissions to execute the QuickSight API calls needed to describe the assets that will be synthesized
 * Lambda layer containing (zip is already created and available in  source/layer/lambdaLayerBotoYAML.zip). It will need to be uploaded to one of your buckets and be referenced in the CloudFormation template below.
   * [PyYaml python package](https://pypi.org/project/PyYAML/) needed to generate the CloudFormation templates as YAML files
   * Up to date [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) package as some of the new QuickSight API methods are not yet available in the version deployed in Python lambda
 * [EventBridge rule](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html) that will trigger the Lambda synthesizer function each time a new QuickSight dashboard is published
 
- For convenience default values were provided for most of the parameters
+#### Template parameters
+
+ For convenience default values were provided for most of the parameters. Remember that you can use the deployment helper script to customize the template according to your environment and then easily deploy the stack. Refer to the [Preparing deployment using helper script section](#preparing-deployment-using-the-helper-script) for more details.
 
 |Parameter name|Description|Type|Default Value|
 | ---- | ---- | ---- |---- |
@@ -221,13 +241,14 @@ Once you have the solution deployed you will be ready to start using your newly 
 
 In order to do so you just need to follow this procedure:
 
-1. [*In your Development account*] Identify the asset (the QuickSight dashboard) that you wan to promote to the next development stage, ensure that this ID matches the one configured in the synthesizer Lambda function as an environment variable
+1. [**In your Development account**] Identify the asset (the QuickSight dashboard) that you wan to promote to the next development stage, ensure that this ID matches the one configured in the synthesizer Lambda function as an environment variable. The dashboard needs to be a valid existing dashboard in this account.
 1. Ensure that the accounts from subsequent stages are subscribed to QuickSight Enterprise edition.
 1. Ensure the AWSCloudFormationStackSetExecutionRole exists in all the stages AWS Accounts. You can [check this by opening this page in IAM](https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/roles/details/AWSCloudFormationStackSetExecutionRole?section=permissions) **in each of the deployment accounts**.
 1. If your dashboard uses data-sources that require a user and a password for authentication, make sure you configure these to make use of AWS Secrets Manager instead of user credentials, [more info here](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html). Create secrets in all the accounts from subsequent stages. 
-1. (only when using `TEMPLATE` as deployment method) If your dashboard uses data-sources that require a [VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html) make sure that an equivalent VPC connection is already configured on all the accounts from subsequent stages.
-1. [*In your Development account*] Choose the desired deployment method `TEMPLATE` or `ASSETS_AS_BUNDLE`. This is controlled via the *REPLICATION_METHOD* Lambda environment variable (set to `ASSETS_AS_BUNDLE` by default)
-1. [*In your Development account*] Manually execute the lambda function present in the development account making sure you change the *MODE* to `INITIALIZE`. This will make the lambda function to scan the resources that need to be synthesized in the source account and will create CloudFormation parameter configuration files in the deployment S3 bucket (a pair of files for each stage will be created, one for source assets and another one for destination assets). A parameter file will look like this:
+1. [only when using `TEMPLATE` as deployment method] If your dashboard uses data-sources that require a [VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html) make sure that an equivalent VPC connection is already configured on all the accounts from subsequent stages.
+1. [**In your Development account**] Choose the desired deployment method `TEMPLATE` or `ASSETS_AS_BUNDLE`. This is controlled via the *REPLICATION_METHOD* Lambda environment variable (set to `ASSETS_AS_BUNDLE` by default)
+1. [**In your Development account**] Manually execute the lambda function present in the development account making sure you change the *MODE* to `INITIALIZE`. 
+1. [**In your Development account**] This will make the lambda function to scan the resources that need to be synthesized in the source account and will create CloudFormation parameter configuration files in the deployment S3 bucket (a pair of files for each stage will be created, one for source assets and another one for destination assets). A parameter file will look like this:
 
 ```json
 [
@@ -245,7 +266,7 @@ In order to do so you just need to follow this procedure:
   }
 ]
 ```
-6. [*In your Deployment account*] Locate the generated files in S3 (the lambda function will output the location of these files upon execution) and edit the contents to parametrize the deployment on the subsequent stages (typically PRE and PRO). If you have set the *REMAP_DS* environment variable to `YES` (default), the lambda function you will also need to define the data-source configuration parameters for each stage. e.g.
+6. [**In your Deployment account**] Locate the generated files in S3 (the lambda function will output the location of these files upon execution) and edit the contents to parametrize the deployment on the subsequent stages (typically PRE and PRO). If you have set the *REMAP_DS* environment variable to `YES` (default), the lambda function you will also need to define the data-source configuration parameters for each stage. e.g.
 
 ```json
 [
@@ -299,10 +320,30 @@ In order to do so you just need to follow this procedure:
   }
 ]
 ```
+7. [*In your Development account*] If you are unsure about the values you need to enter in this file you can execute the [describe-data-source](https://docs.aws.amazon.com/cli/latest/reference/quicksight/describe-data-source.html) operation for each of the data sources used in your dashboard to understand the resources they use (e.g. S3 buckets, RDS databases, Redshift clusters ...) and then determine which values should you use in each of the subsequent stage environments (PRE and PRO).
 7. [*In your Development account*] Once you have edited the parameter files for each stage upload the edited files to the same location in S3 and then execute the lambda function changing the environment variable *MODE* to `DEPLOY` or just create a new version of the dashboard configured in the pipeline. This will trigger the Lambda that will create the [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) according to the selected *REPLICATION_METHOD* and will upload them to the deployment S3 bucket monitored by EventBridge that will trigger the execution of the pipeline
 7. [*In your Deployment account*] Check the pipeline execution and the deployment in your second stage (typically PRE), once the deployment is complete navigate to the quicksight  console in your region to see the deployed analysis.
 7. [*In your Deployment account*] Once you have validated the analysis in the first stage (PRE) you may go back to the pipeline and decide whether or not you want to approve the change so it reaches the second stage (typically PRO)
 7. After changes have been approved you should be able to see the deployment started that will progress your changes to PRO
+
+## Solution limitations
+
+* At the moment the Pipeline supports the continouus deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and sythesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
+* When using `TEMPLATE` as replication method, supported datasources are RDS, Redshift, S3 and Athena
+* When using `ASSETS_AS_BUNDLE` as replication method, all the datasources are supported excepting the ones [listed here](https://docs.aws.amazon.com/quicksight/latest/developerguide/asset-bundle-ops.html). Also uploaded file datasources are not supported.
+
+## Cleaning up
+
+If you want to clean up all the resources created by this solution or you want to re-deploy it from scratch you can follow these steps to do so.
+
+1. First you need to delete all the stack set instances created by the pipeline. This would be necessary if you have executed the AWS Lambda function in `DEPLOY` mode. 
+1. [**In the deployment acccount**] In order to delete the stack instances navigate to the [Stack Set console in CloudFormation](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets). You should see two stack sets for each pipeline you have created, <PipelineName>-QSSourceAssets and <PipelineName>-QSDestAssets. In order to delete the instances of each pipeline just click on each stack set and then click in the actions drop down menu and select `Delete stacks from StackSet`.
+1. [**In the deployment acccount**] Now input the account IDs where these stacks are created (for <PipelineName>-QSSourceAssets it would be the development and preproduction account and for  <PipelineName>-QSSDestAssets it would be the preproduction and production account). Select `Add all regions` on the region selector and click Next.
+1. [**In the deployment acccount**] Once the Stack Set instances are deleted you will be able to delete the Stack Set by clicking on the actions drop down menu and then selecting `Delete StackSet`.
+1. Once you have deleted all the stack sets (remember that you need to perform the steps mentioned above both with the <PipelineName>-QSSourceAssets and <PipelineName>-QSDestAssets stack sets) you can proceed to delete the deployment  and first stage templates.
+1. [**In the deployment acccount**] Navigate to the [S3 console to list your buckets](https://s3.console.aws.amazon.com/s3/buckets?region=us-east-1), select the bucket you have created to host the QS CI CD pipeline assets and click on `Empty` button.
+1. [**In the deployment acccount**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the deployment account resources and click on `Delete`
+1. [**In the development acccount**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the development account (a.k.a. first stage account) resources and click on `Delete`
 
 ## FAQ/Troubleshooting
 

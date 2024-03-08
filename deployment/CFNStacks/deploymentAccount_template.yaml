@@ -15,7 +15,7 @@ Parameters:
     Type: String    
     AllowedPattern: "^[0-9]{12}"   
   PipelineS3BucketName:
-    Description: S3 Bucket to use for pipeline assets
+    Description: S3 Bucket to use for pipeline assets, could be an existing bucket, in that case make sure you change the CreateBucket parameter to false
     Type: String
     AllowedPattern: "^[0-9a-z\\.-]{3,63}"
     Default: "qs-pipeline-bucket"
@@ -94,16 +94,17 @@ Parameters:
 
 Conditions:
   CreateBucketCondition:
-    !Equals [!Ref CreateBucket, "true"]
+    Fn::Equals: [Ref: CreateBucket, "true"]
   CreateAdmRoleCondition:
-    !Equals [!Ref CreateAdmRole, "true"]
+    Fn::Equals: [Ref: CreateAdmRole, "true"]
 
 Resources:
   AdministrationRole:
     Type: AWS::IAM::Role
     Condition: CreateAdmRoleCondition
     Properties:
-      RoleName: !Ref AdministrationRoleName
+      RoleName: 
+        Ref: AdministrationRoleName
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -114,7 +115,8 @@ Resources:
               - sts:AssumeRole
       Path: /
       Policies:
-        - PolicyName: !Sub AssumeRole-${ExecutionRoleName}
+        - PolicyName: 
+            Fn::Sub: AssumeRole-${ExecutionRoleName}
           PolicyDocument:
             Version: 2012-10-17
             Statement:
@@ -122,15 +124,16 @@ Resources:
                 Action:
                   - sts:AssumeRole
                 Resource:
-                  - !Sub 'arn:*:iam::${DevelopmentAccountId}:role/${ExecutionRoleName}'
-                  - !Sub 'arn:*:iam::${PreProdAccountId}:role/${ExecutionRoleName}'
-                  - !Sub 'arn:*:iam::${ProdAccountId}:role/${ExecutionRoleName}'
+                  - Fn::Sub: 'arn:*:iam::${DevelopmentAccountId}:role/${ExecutionRoleName}'
+                  - Fn::Sub: 'arn:*:iam::${PreProdAccountId}:role/${ExecutionRoleName}'
+                  - Fn::Sub: 'arn:*:iam::${ProdAccountId}:role/${ExecutionRoleName}'
   pipelineS3Bucket:
     Type: AWS::S3::Bucket
     Condition: CreateBucketCondition
     Properties: 
       AccessControl: Private
-      BucketName: !Ref PipelineS3BucketName
+      BucketName: 
+        Ref: PipelineS3BucketName
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -149,15 +152,19 @@ Resources:
   approvalTopic:
     Type: AWS::SNS::Topic
     Properties:
-      DisplayName: !Sub ${PipelineName}-Topic
-      KmsMasterKeyId: !Ref snsEncriptionKey
+      DisplayName: 
+        Fn::Sub: ${PipelineName}-Topic
+      KmsMasterKeyId: 
+        Ref: snsEncriptionKey
       Subscription: 
-        - Endpoint: !Ref ApprovalEmail
+        - Endpoint: 
+            Ref: ApprovalEmail
           Protocol: email  
   snsEncriptionKey:
     Type: AWS::KMS::Key
     Properties: 
-      Description: !Sub KMS key used to encript content of messages delivered to QS ${PipelineName} CI/CD pipeline
+      Description: 
+        Fn::Sub: KMS key used to encript content of messages delivered to QS ${PipelineName} CI/CD pipeline
       Enabled: True
       EnableKeyRotation: True
       KeyPolicy: 
@@ -173,11 +180,13 @@ Resources:
           - kms:DescribeKey
           Condition:
             StringEquals:
-              kms:CallerAccount: !Ref AWS::AccountId 
+              kms:CallerAccount: 
+                Ref: AWS::AccountId 
               kms:ViaService: sns.us-east-1.amazonaws.com
           Effect: Allow
           Principal:
-            AWS: !GetAtt CodePipelineRole.Arn
+            AWS: 
+              Fn::GetAtt: CodePipelineRole.Arn
           Resource: '*'
         - Sid: Allow administration of the key
           Effect: Allow
@@ -195,7 +204,8 @@ Resources:
           - kms:ScheduleKeyDeletion
           - kms:CancelKeyDeletion            
           Principal:
-            AWS: !Ref AccountAdminARN
+            AWS: 
+              Ref: AccountAdminARN
           Resource: '*'
         - Sid: Allow direct access to key metadata to the account
           Action:
@@ -205,7 +215,8 @@ Resources:
           - kms:RevokeGrant
           Effect: Allow
           Principal:
-            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            AWS: 
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
           Resource: '*'          
       KeySpec: SYMMETRIC_DEFAULT
       KeyUsage: ENCRYPT_DECRYPT 
@@ -215,13 +226,15 @@ Resources:
     DependsOn:       
       - CodePipelineRole
     Properties:
-      Name: !Ref PipelineName
+      Name: 
+        Ref: PipelineName
       PipelineType: V2
       RoleArn: 
-        !GetAtt CodePipelineRole.Arn
+        Fn::GetAtt: CodePipelineRole.Arn
       ArtifactStore:
         Type: S3
-        Location: !If [CreateBucketCondition, !Ref pipelineS3Bucket, !Ref PipelineS3BucketName]  
+        Location: 
+          Fn::If: [CreateBucketCondition, Ref: pipelineS3Bucket, Ref: PipelineS3BucketName]  
       Stages: 
         - Name: Source
           Actions:
@@ -235,10 +248,13 @@ Resources:
                   - Name: SourceAssetsArtifact
               Configuration:                
                   PollForSourceChanges: 'false'
-                  S3Bucket: !If [CreateBucketCondition, !Ref pipelineS3Bucket, !Ref PipelineS3BucketName]  
-                  S3ObjectKey: !Sub ${PipelineName}/CFNTemplates/SOURCE_assets_CFN.zip
+                  S3Bucket: 
+                    Fn::If: [CreateBucketCondition, Ref: pipelineS3Bucket, Ref: PipelineS3BucketName]  
+                  S3ObjectKey: 
+                    Fn::Sub: ${PipelineName}/CFNTemplates/SOURCE_assets_CFN.zip
               RunOrder: 1
-              Region: !Ref S3Region
+              Region: 
+                Ref: S3Region
               Namespace: SourceVariablesSource
             - Name: Dest_Assets
               ActionTypeId:
@@ -250,53 +266,74 @@ Resources:
                   - Name: DestAssetsArtifact
               Configuration:                
                   PollForSourceChanges: 'false'
-                  S3Bucket: !If [CreateBucketCondition, !Ref pipelineS3Bucket, !Ref PipelineS3BucketName]  
-                  S3ObjectKey: !Sub ${PipelineName}/CFNTemplates/DEST_assets_CFN.zip
+                  S3Bucket: 
+                    Fn::If: [CreateBucketCondition, Ref: pipelineS3Bucket, Ref: PipelineS3BucketName]  
+                  S3ObjectKey: 
+                    Fn::Sub: ${PipelineName}/CFNTemplates/DEST_assets_CFN.zip
               RunOrder: 2
-              Region: !Ref S3Region
+              Region:
+                Ref: S3Region
               Namespace: SourceVariablesDest
         - Name: Deploy
           Actions:
-            - Name: !Sub Deploy_${Stage2Name}_Source_Assets
+            - Name: 
+                Fn::Sub: Deploy_${Stage2Name}_Source_Assets
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
-                DeploymentTargets: !Ref DevelopmentAccountId
-                ExecutionRoleName: !Ref ExecutionRoleName               
+                AdministrationRoleArn: 
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
+                DeploymentTargets: 
+                  Ref: DevelopmentAccountId
+                ExecutionRoleName: 
+                  Ref: ExecutionRoleName               
                 PermissionModel: SELF_MANAGED
-                Regions: !Ref QuickSightRegion
-                StackSetName: !Sub ${PipelineName}-QSSourceAssets
+                Regions: 
+                  Ref: QuickSightRegion
+                StackSetName: 
+                  Fn::Sub: ${PipelineName}-QSSourceAssets
                 TemplatePath: SourceAssetsArtifact::QStemplate_CFN_SOURCE.yaml
-                Parameters: !Sub SourceAssetsArtifact::source_cfn_template_parameters_${Stage2Name}.txt
+                Parameters: 
+                  Fn::Sub: SourceAssetsArtifact::source_cfn_template_parameters_${Stage2Name}.txt
               InputArtifacts:
                   - Name: SourceAssetsArtifact
               RunOrder: 1
-              Region: !Ref "AWS::Region"
-              Namespace: !Sub DeployVariablesSource${Stage2Name}
-            - Name: !Sub Deploy_${Stage2Name}_Dest_Assets
+              Region: 
+                Ref: "AWS::Region"
+              Namespace: 
+                Fn::Sub: DeployVariablesSource${Stage2Name}
+            - Name: 
+                Fn::Sub: Deploy_${Stage2Name}_Dest_Assets
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
-                AdministrationRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
-                DeploymentTargets: !Ref PreProdAccountId
-                ExecutionRoleName: !Ref ExecutionRoleName                
+                AdministrationRoleArn: 
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
+                DeploymentTargets: 
+                  Ref: PreProdAccountId
+                ExecutionRoleName: 
+                  Ref: ExecutionRoleName                
                 PermissionModel: SELF_MANAGED
-                Regions: !Ref QuickSightRegion
-                StackSetName: !Sub ${PipelineName}-QSDestAssets
+                Regions: 
+                  Ref: QuickSightRegion
+                StackSetName: 
+                  Fn::Sub: ${PipelineName}-QSDestAssets
                 TemplatePath: DestAssetsArtifact::QS_assets_CFN_DEST.yaml
-                Parameters: !Sub DestAssetsArtifact::dest_cfn_template_parameters_${Stage2Name}.txt
+                Parameters: 
+                  Fn::Sub: DestAssetsArtifact::dest_cfn_template_parameters_${Stage2Name}.txt
               InputArtifacts:
                 - Name: DestAssetsArtifact
               RunOrder: 2
-              Region: !Ref "AWS::Region"
-              Namespace: !Sub DeployVariablesDest${Stage2Name}
+              Region: 
+                Ref: "AWS::Region"
+              Namespace:
+                Fn::Sub: DeployVariablesDest${Stage2Name}
         - Name: Approval-Stage
           Actions:
             - Name: Manual-Approval
@@ -306,37 +343,51 @@ Resources:
                 Provider: Manual
                 Version: "1"
               Configuration:
-                NotificationArn: !Ref approvalTopic
-              Region: !Ref "AWS::Region"
+                NotificationArn: 
+                  Ref: approvalTopic
+              Region: 
+                Ref: "AWS::Region"
               RunOrder: 1
-        - Name: !Sub Deploy-${Stage3Name}
+        - Name: 
+            Fn::Sub: Deploy-${Stage3Name}
           Actions:
-            - Name: !Sub Deploy_${Stage3Name}_Source_Assets
+            - Name: 
+                Fn::Sub: Deploy_${Stage3Name}_Source_Assets
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
                 Provider: CloudFormationStackInstances
                 Version: "1"
               Configuration:
-                DeploymentTargets: !Ref PreProdAccountId
-                ParameterOverrides: !Sub SourceAssetsArtifact::source_cfn_template_parameters_${Stage3Name}.txt
-                Regions: !Ref QuickSightRegion
-                StackSetName: !Sub ${PipelineName}-QSSourceAssets
+                DeploymentTargets: 
+                  Ref: PreProdAccountId
+                ParameterOverrides: 
+                  Fn::Sub: SourceAssetsArtifact::source_cfn_template_parameters_${Stage3Name}.txt
+                Regions: 
+                  Ref: QuickSightRegion
+                StackSetName: 
+                  Fn::Sub: ${PipelineName}-QSSourceAssets
               InputArtifacts:
                 - Name: SourceAssetsArtifact
-              Region: !Ref "AWS::Region"
+              Region: 
+                Ref: "AWS::Region"
               RunOrder: 1
-            - Name: !Sub Deploy_${Stage3Name}_Dest_Assets
+            - Name: 
+                Fn::Sub: Deploy_${Stage3Name}_Dest_Assets
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
                 Provider: CloudFormationStackInstances
                 Version: "1"
               Configuration:
-                DeploymentTargets: !Ref ProdAccountId
-                ParameterOverrides: !Sub DestAssetsArtifact::dest_cfn_template_parameters_${Stage3Name}.txt                  
-                Regions: !Ref QuickSightRegion
-                StackSetName: !Sub ${PipelineName}-QSDestAssets
+                DeploymentTargets: 
+                  Ref: ProdAccountId
+                ParameterOverrides: 
+                  Fn::Sub: DestAssetsArtifact::dest_cfn_template_parameters_${Stage3Name}.txt                  
+                Regions: 
+                  Ref: QuickSightRegion
+                StackSetName: 
+                  Fn::Sub: ${PipelineName}-QSDestAssets
               InputArtifacts:
                   - Name: DestAssetsArtifact
               RunOrder: 2
@@ -358,17 +409,21 @@ Resources:
         detail:
           bucket: 
             name: 
-              - !If [CreateBucketCondition, !Ref pipelineS3Bucket, !Ref PipelineS3BucketName]  
+              - Fn::If: [CreateBucketCondition, Ref: pipelineS3Bucket, Ref: PipelineS3BucketName]  
           object:
             key:
-              - !Sub ${PipelineName}/CFNTemplates/DEST_assets_CFN.zip
-              - !Sub ${PipelineName}/CFNTemplates/SOURCE_assets_CFN.zip
-      Name: !Sub ${PipelineName}S3SourceRule
+              - Fn::Sub: ${PipelineName}/CFNTemplates/DEST_assets_CFN.zip
+              - Fn::Sub: ${PipelineName}/CFNTemplates/SOURCE_assets_CFN.zip
+      Name: 
+        Fn::Sub: ${PipelineName}S3SourceRule
       State: ENABLED
       Targets: 
-        -   Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${codepipeline}
-            Id: !Ref codepipeline                   
-            RoleArn: !GetAtt eventBridgeRole.Arn
+        -   Arn: 
+              Fn::Sub: arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${codepipeline}
+            Id: 
+              Ref: codepipeline                   
+            RoleArn: 
+              Fn::GetAtt: eventBridgeRole.Arn
       
   eventBridgeRole:
     Type: AWS::IAM::Role
@@ -382,7 +437,8 @@ Resources:
               Service: events.amazonaws.com
       Policies:
         - 
-         PolicyName: !Sub start-pipeline-execution-${codepipeline}
+         PolicyName: 
+           Fn::Sub: start-pipeline-execution-${codepipeline}
          PolicyDocument:
            Version: "2012-10-17"
            Statement:
@@ -391,7 +447,7 @@ Resources:
                 Action:
                   - codepipeline:StartPipelineExecution
                 Resource:
-                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${codepipeline}
+                  - Fn::Sub: arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${codepipeline}
 
   CodePipelineRole:
     Type: AWS::IAM::Role
@@ -418,8 +474,8 @@ Resources:
                 - cloudformation.amazonaws.com
             Effect: Allow
             Resource: 
-              - !GetAtt CodePipelineRole.Arn
-              - !Sub arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
+              - Fn::GetAtt: CodePipelineRole.Arn
+              - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
           - Action:
             - cloudwatch:*
             Effect: Allow
@@ -428,17 +484,20 @@ Resources:
             - s3:GetObject*
             - s3:PutObject*            
             Effect: Allow
-            Resource:  !Sub "arn:aws:s3:::${pipelineS3Bucket}/*"
+            Resource:  
+              Fn::Sub: "arn:aws:s3:::${PipelineS3BucketName}/*"
           - Action:
             - sns:Publish            
             Effect: Allow
-            Resource:  !Ref approvalTopic
+            Resource:  
+              Ref: approvalTopic
           - Action:
             - s3:ListBucket
             - s3:PutBucket*
             - s3:GetBucket*
             Effect: Allow
-            Resource:  !Sub "arn:aws:s3:::${pipelineS3Bucket}"
+            Resource:  
+              Fn::Sub: "arn:aws:s3:::${PipelineS3BucketName}"
           - Action:
             - cloudformation:CreateStackSet
             - cloudformation:CreateStackInstances
@@ -449,28 +508,30 @@ Resources:
             - cloudformation:DescribeStackSetOperation
             Effect: Allow
             Resource:  
-              - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSSourceAssets:*"
-              - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSDestAssets:*"              
+              - Fn::Sub: "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSSourceAssets:*"
+              - Fn::Sub: "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSDestAssets:*"              
       PolicyName: QSCICDPipelinePolicy
-      RoleName: !Ref CodePipelineRole
+      RoleName: 
+        Ref: CodePipelineRole
 
                 
   S3AssumeRole:
-    Type: AWS::IAM::Role
-    DependsOn: pipelineS3Bucket
-    Condition: CreateBucketCondition
+    Type: AWS::IAM::Role    
     Properties:  
-      RoleName: !Sub DevAccountS3AccessRole-QSCICD-${PipelineName}
+      RoleName: 
+        Fn::Sub: DevAccountS3AccessRole-QSCICD-${PipelineName}
       AssumeRolePolicyDocument: 
         Version: '2012-10-17'
         Statement:
           - Action: sts:AssumeRole
             Effect: Allow
             Principal:
-              AWS: !Sub "arn:aws:iam::${DevelopmentAccountId}:root"
+              AWS: 
+                Fn::Sub: "arn:aws:iam::${DevelopmentAccountId}:root"
             Condition:
               StringEquals:
-                sts:ExternalId: !Ref AssumeRoleExtId
+                sts:ExternalId: 
+                  Ref: AssumeRoleExtId
       Policies:
         - 
          PolicyName: "DevAccountWriteToResourceBucket"
@@ -486,17 +547,11 @@ Resources:
               - s3:GetBucketLocation
               Effect: Allow
               Resource:
-              - !Sub "arn:aws:s3:::${pipelineS3Bucket}"
-              - !Sub "arn:aws:s3:::${pipelineS3Bucket}/*"
+              - Fn::Sub: "arn:aws:s3:::${PipelineS3BucketName}"
+              - Fn::Sub: "arn:aws:s3:::${PipelineS3BucketName}/*"
               Sid: VisualEditor0
 Outputs:
   Codepipeline:
-    Description: Codepipeline created to implement QuickSight CI/CD
-    Value: !Ref codepipeline
-  TopicArn:
-    Description: SNS topic ARN used for notifications upon approval requests in production, your provided approval email has been added to it, you will need to confirm the address
-    Value: !Ref approvalTopic
-  DeploymentS3Bucket:
-    Description: Name of the bucket that will be used by the code pipeline to store its artifacts
-    Value: !Ref pipelineS3Bucket
-    
+    Description: Link to the codepipeline created to implement QuickSight CI/CD
+    Value: 
+      Fn::Sub: "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${PipelineName}/view" 
