@@ -1229,7 +1229,7 @@ def replicate_dashboard_via_template(analysisObj:QSAnalysisDef, remap):
         for datasourceDefObj in datasetDefObj.dependingDSources:
             try:
                 dest_account_yaml = generateDataSourceCFN(datasourceDefObj=datasourceDefObj, appendContent=dest_account_yaml, remap=remap)
-            except  Error as error:
+            except ValueError as error:
                 print(error)
                 print('There was an issue creating the following datasource: {datasourceId} cannot proceed further'.format(datasourceId=datasourceDefObj.id))
                 return {
