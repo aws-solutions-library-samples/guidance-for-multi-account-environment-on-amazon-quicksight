@@ -155,16 +155,16 @@ Resources:
       DisplayName: 
         Fn::Sub: ${PipelineName}-Topic
       KmsMasterKeyId: 
-        Ref: snsEncriptionKey
+        Ref: snsEncryptionKey
       Subscription: 
         - Endpoint: 
             Ref: ApprovalEmail
           Protocol: email  
-  snsEncriptionKey:
+  snsEncryptionKey:
     Type: AWS::KMS::Key
     Properties: 
       Description: 
-        Fn::Sub: KMS key used to encript content of messages delivered to QS ${PipelineName} CI/CD pipeline
+        Fn::Sub: KMS key used to encrypt content of messages delivered to QS ${PipelineName} CI/CD pipeline
       Enabled: True
       EnableKeyRotation: True
       KeyPolicy: 
