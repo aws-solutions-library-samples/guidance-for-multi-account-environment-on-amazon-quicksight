@@ -121,7 +121,7 @@ Solution assets will need to be deployed in two of the accounts, the first accou
   * Enable [CloudFormation StackSets](https://us-east-1.console.aws.amazon.com/organizations/v2/home/services/CloudFormation%20StackSets) service in the AWS Organizations service console.
   * Create the AdministrationRole in the admin account using the toggle option in deploymentAccount_template.yaml template 
   * Create the ExecutionRole **in each of the stages accounts**, you can use the provided AWSCloudFormationStackSetExecutionRole.yml stack for this.
-* Data-sources in the Dev account *should be using secrets* for RDS, RDBMSs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
+* Data-sources in the Dev account *should be using secrets* for RDS, RDBMs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
 * (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
 orgs_manage_org_support-all-features.html).
 * Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). At the moment the use of [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is not supported when using CloudFormation StackSet operations in CodePipeline.
@@ -141,9 +141,9 @@ Under the root folder of this solution you can find a python script that helps y
 
 #### Using the script
 
-The script takes a number of parameters (some of them are optional) to set the default values of the CloudFormation templates in accordance with your needs, then the script uploads both the CloudFormation templates and the code files referenced by them to create the Lamba function to your bucket and then provides three links, one to be used in the _Deployment account_, one to be used in the _Development a.k.a. first stage account_ and another one to be used in each of the development stages accounts in case you need to create the IAM role to implement delegated access for the AWS CloudFormation Stack Sets operations.
+The script takes a number of parameters (some of them are optional) to set the default values of the CloudFormation templates in accordance with your needs, then the script uploads both the CloudFormation templates and the code files referenced by them to create the Lambda function to your bucket and then provides three links, one to be used in the _Deployment account_, one to be used in the _Development a.k.a. first stage account_ and another one to be used in each of the development stages accounts in case you need to create the IAM role to implement delegated access for the AWS CloudFormation Stack Sets operations.
 
-NOTE: The helper script uses [PyYAML](https://pypi.org/project/PyYAML/) library which is not part of the Python Standard libraries so you might need to install it, you can to it easiyl by executing ```pip install pyyaml```
+NOTE: The helper script uses [PyYAML](https://pypi.org/project/PyYAML/) library which is not part of the Python Standard libraries so you might need to install it, you can to it easily by executing ```pip install pyyaml```
 
 Now, you can check the parameters supported by the script by executing:
 
@@ -225,7 +225,7 @@ The first stage account in our CI/CD pipeline will need to have the following as
 |SourceQSUser|Source stage username to use to retrieve QS assets|String| User defined|
 |DestQSUser|Dest stage username to use to share the created QS assets with|String| User defined|
 |SourceCodeS3Bucket|S3 Bucket containing the code|String|  User defined|
-|SourceCodeKey| Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthezizer folder| String| User defined|
+|SourceCodeKey| Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthesizer folder| String| User defined|
 |LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries. For your convenience you have the source code zipped in the solution under source/lambda/layer folder| String| User defined|
 |StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String| DEV, PRE, PRO|
 |DashboardId| Dashboard ID in development you want to track changes for   | String|  User defined|
@@ -328,7 +328,7 @@ In order to do so you just need to follow this procedure:
 
 ## Solution limitations
 
-* At the moment the Pipeline supports the continouus deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and sythesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
+* At the moment the Pipeline supports the continuous deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and synthesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
 * When using `TEMPLATE` as replication method, supported datasources are RDS, Redshift, S3 and Athena
 * When using `ASSETS_AS_BUNDLE` as replication method, all the datasources are supported excepting the ones [listed here](https://docs.aws.amazon.com/quicksight/latest/developerguide/asset-bundle-ops.html). Also uploaded file datasources are not supported.
 
@@ -337,13 +337,13 @@ In order to do so you just need to follow this procedure:
 If you want to clean up all the resources created by this solution or you want to re-deploy it from scratch you can follow these steps to do so.
 
 1. First you need to delete all the stack set instances created by the pipeline. This would be necessary if you have executed the AWS Lambda function in `DEPLOY` mode. 
-1. [**In the deployment acccount**] In order to delete the stack instances navigate to the [Stack Set console in CloudFormation](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets). You should see two stack sets for each pipeline you have created, <PipelineName>-QSSourceAssets and <PipelineName>-QSDestAssets. In order to delete the instances of each pipeline just click on each stack set and then click in the actions drop down menu and select `Delete stacks from StackSet`.
-1. [**In the deployment acccount**] Now input the account IDs where these stacks are created (for <PipelineName>-QSSourceAssets it would be the development and preproduction account and for  <PipelineName>-QSSDestAssets it would be the preproduction and production account). Select `Add all regions` on the region selector and click Next.
-1. [**In the deployment acccount**] Once the Stack Set instances are deleted you will be able to delete the Stack Set by clicking on the actions drop down menu and then selecting `Delete StackSet`.
+1. [**In the deployment account**] In order to delete the stack instances navigate to the [Stack Set console in CloudFormation](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacksets). You should see two stack sets for each pipeline you have created, <PipelineName>-QSSourceAssets and <PipelineName>-QSDestAssets. In order to delete the instances of each pipeline just click on each stack set and then click in the actions drop down menu and select `Delete stacks from StackSet`.
+1. [**In the deployment account**] Now input the account IDs where these stacks are created (for <PipelineName>-QSSourceAssets it would be the development and preproduction account and for  <PipelineName>-QSSDestAssets it would be the preproduction and production account). Select `Add all regions` on the region selector and click Next.
+1. [**In the deployment account**] Once the Stack Set instances are deleted you will be able to delete the Stack Set by clicking on the actions drop down menu and then selecting `Delete StackSet`.
 1. Once you have deleted all the stack sets (remember that you need to perform the steps mentioned above both with the <PipelineName>-QSSourceAssets and <PipelineName>-QSDestAssets stack sets) you can proceed to delete the deployment  and first stage templates.
-1. [**In the deployment acccount**] Navigate to the [S3 console to list your buckets](https://s3.console.aws.amazon.com/s3/buckets?region=us-east-1), select the bucket you have created to host the QS CI CD pipeline assets and click on `Empty` button.
-1. [**In the deployment acccount**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the deployment account resources and click on `Delete`
-1. [**In the development acccount**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the development account (a.k.a. first stage account) resources and click on `Delete`
+1. [**In the deployment account**] Navigate to the [S3 console to list your buckets](https://s3.console.aws.amazon.com/s3/buckets?region=us-east-1), select the bucket you have created to host the QS CI CD pipeline assets and click on `Empty` button.
+1. [**In the deployment account**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the deployment account resources and click on `Delete`
+1. [**In the development account**] Navigate to the [Cloud Formation stacks in the console](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks?filteringText=&filteringStatus=active&viewNested=true), select the stack containing the development account (a.k.a. first stage account) resources and click on `Delete`
 
 ## FAQ/Troubleshooting
 

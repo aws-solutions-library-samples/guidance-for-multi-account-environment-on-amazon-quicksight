@@ -158,14 +158,14 @@ with open(output_deployment_account_template_path, 'w+') as f:
     yaml.dump(deployment_account_template, f)
 
 # zip code
-zip_code_outpùt = "{workspace_dir}/{archive_file}".format(workspace_dir=WORKSPACE_DIR, archive_file=ZIP_CODE_FILE)
-shutil.make_archive(base_name=zip_code_outpùt, root_dir=LOCAL_CODE_PATH, format='zip')
+zip_code_output = "{workspace_dir}/{archive_file}".format(workspace_dir=WORKSPACE_DIR, archive_file=ZIP_CODE_FILE)
+shutil.make_archive(base_name=zip_code_output, root_dir=LOCAL_CODE_PATH, format='zip')
 
 # upload layer
 uploadFileToS3(bucket=param_bucket, filename=LOCAL_LAYER_PATH,region=args.bucket_region, prefix=code_prefix, object_name='lambdaLayerBotoYAML.zip')
 
 # upload code
-uploadFileToS3(bucket=param_bucket, filename='{file_name}.zip'.format(file_name=zip_code_outpùt),region=args.bucket_region, prefix=code_prefix, object_name='qs_assets_CFN_synthesizer.zip')
+uploadFileToS3(bucket=param_bucket, filename='{file_name}.zip'.format(file_name=zip_code_output),region=args.bucket_region, prefix=code_prefix, object_name='qs_assets_CFN_synthesizer.zip')
 
 
 #remove previous zipped files

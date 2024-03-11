@@ -19,7 +19,7 @@ Parameters:
     Type: String
   DeploymentAccountId:
     AllowedPattern: ^[0-9]{12}
-    Description: Account ID used for the deploymment pipelines
+    Description: Account ID used for the deployment pipelines
     Type: String
   DeploymentS3Bucket:
     AllowedPattern: ^[0-9a-z\.-]{3,63}
@@ -68,7 +68,7 @@ Parameters:
   SourceCodeKey:
     AllowedPattern: ^[0-9a-zA-Z\/\-_]+\.zip
     Description: Key within S3 Bucket that contains the zipped code. For your convenience
-      you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthezizer
+      you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthesizer
       folder.
     Type: String
   SourceCodeS3Bucket:
