@@ -380,6 +380,14 @@ When executing changes in the pipeline not all the changes are deployed in order
 
 This is expected when Code Pipeline works in SUPERSEDED mode, where the pipelines is able to process multiple executions at the same time. Each execution is run through the pipeline separately. The pipeline processes each execution in order and might supersede an earlier execution with a later one. The following rules are used to process executions in a pipeline for SUPERSEDED mode, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions). If you want your pipeline to lock stages when an execution is being processed so waiting executions do not overtake executions that have already started you might want to take a look to the [QUEUED mode here.](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions-queued). You can change the pipeline mode according to your needs, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/execution-modes.html).
 
+### Problem
+
+When executing the synthesizer lambda function it raises an error stating ```An error occurred (ResourceNotFoundException) when calling the DescribeDashboard operation```
+
+### Solution
+
+Ensure the dashboard specified on the `DASHBOARD_ID` Lambda environment variable exists in the development account (a.k.a first stage account)
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
