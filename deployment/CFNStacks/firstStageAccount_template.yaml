@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: Cloudformation template to build assets to used in the Guidance for Multi-account
-  Environments on Amazon QuickSight Solution (SO9402). In particular the assets present
+  Environments on Amazon QuickSight Guidance (SO9402). In particular the assets present
   on the environments account
 Outputs:
   LambdaFunction:
@@ -37,7 +37,7 @@ Parameters:
     AllowedPattern: ^[0-9a-zA-Z\/\-_]+\.zip
     Description: Key within S3 Bucket that contains the zipped code for the lambda
       layer with external libraries. For your convenience you have the source code
-      zipped in the solution under source/lambda/layer folder.
+      zipped in the guidance under source/lambda/layer folder.
     Type: String
   PipelineName:
     Default: QSCICDPipeline
@@ -68,7 +68,7 @@ Parameters:
   SourceCodeKey:
     AllowedPattern: ^[0-9a-zA-Z\/\-_]+\.zip
     Description: Key within S3 Bucket that contains the zipped code. For your convenience
-      you have the source code zipped in the solution under source/lambda/qs_assets_CFN_synthesizer
+      you have the source code zipped in the guidance under source/lambda/qs_assets_CFN_synthesizer
       folder.
     Type: String
   SourceCodeS3Bucket:
