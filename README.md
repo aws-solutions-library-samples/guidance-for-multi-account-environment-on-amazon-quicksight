@@ -1,4 +1,23 @@
-# Multi-account environment for Amazon QuickSight
+# Guidance for Multi-account environment for Amazon QuickSight
+
+## Table of Contents
+
+1. [Introduction](#introduction)
+1. [Core concepts and terminology](#core-concepts-and-terminology)
+1. [Architecture](#architecture)
+    - [Guidance overview and AWS services to use](#guidance-overview-and-aws-services-to-use)
+    - [Architecture Diagram](#architecture-diagram)
+1. [Deploying the guidance](#deploying-the-guidance)
+    - [re-requisites and assumptions](#pre-requisites-and-assumptions)
+    - [Preparing deployment using the helper script](#preparing-deployment-using-the-helper-script)
+    - [Deploying _Deployment account_ assets](#deploying-deployment-account-assets)
+    - [Deploying _Development a.k.a. first stage account_ assets](#deploying-development-aka-first-stage-account-assets)
+1. [Using the guidance](#using-the-guidance)
+1. [Guidance limitations](#guidance-limitations)
+1. [Cleaning up](#cleaning-up)
+1. [FAQ/Troubleshooting](#faqtroubleshooting)
+1. [Contributing](#contributing)
+1. [License](#license)
 
 ## Introduction
 
@@ -63,9 +82,15 @@ Here you will find definition to specific terms that will be used throughout the
 
 Cloud-native, serverless, business intelligence (BI) that will allow us to create assets in dev account and automatically progress them to the pre-production and production accounts. In order to perform automation we wil be using [QuickSight APIs](https://docs.aws.amazon.com/quicksight/latest/APIReference/Welcome.html) and its [support in CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/AWS_QuickSight.html) to manage assets.
 
+#### EventBridge
+
+EventBridge makes it easier to build event-driven applications at scale using events generated from your applications, integrated SaaS applications, and AWS services. 
+
+In our solution we use EventBridge to trigger our automation (the synthesizer Lambda function and the CI/CD pipeline). In first place, the synthesizer lambda function its triggered when a new version of a dashboard is created, this function will generate a set of files that will be stored in S3 that also will trigger the deployment of the CI/CD pipeline (in AWS CodePipeline) that is also integrated with EventBridge (in this case watching for new files created in S3).
+
 #### Lambda:
 
-Will allow us to synthesize CloudFormation templates from our assets in development to have them deployed in pre-production and then in production. The lambda function will synthesize CloudFormation templates that are parametrized (so they can be used in any environment stage) and will store the generated  templates in S3 to be referred from the pipeline. There will be two templates generated:
+The QSAssetsCFNSynthesizer lambda function is executed each time a new dashboard version is created in our Development account (via EventBridge rule that is created as part of the initial deployment), then it will check the QSTrackedAssets DynamoDB table to see if its a tracked asset, in case it is, it will run synthesizing in a CloudFormation template from our QS assets present in development. The QSAssetsCFNSynthesizer lambda function will generate deployment assets (CFN templates) that will be uploaded to S3 triggering a AWS CodePipeline pipeline that will have them deployed in pre-production and then in production. The lambda generates CloudFormation templates that are **nested and parametrized** (so they can be used in any environment stage) and also prevent reaching the limits of CFN template size (1MB when using S3). The lambda function will generate two different templates generated:
 
 * Source assets template: 
   * If `TEMPLATE` deployment method is selected: the source asset CloudFormation template will be creating a QuickSight Template from the source analysis in Dev stage so the asset to be copied over the next phase of the pipeline. Phase dependent variables such as the source account ID, region, QS user name, etc... will be added as [parameters so they can be set (or overridden)](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-action-reference.html) by the different codepipeline phases. This template will be automatically deployed in the Dev account and pre-production account (to templatize the dashboard created in this stage).
@@ -86,6 +111,13 @@ Central piece of the guidance that, from a centralized deployment account (that 
 
 [Parameter overrides](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-CloudFormation.html) are used in each stage to define environment dependent variables in CloudFormation such as the account ID, data-source connection strings, etc ...
 
+#### DynamoDB
+
+We will be using two DynamoDB auxiliary tables:
+
+* QSTrackedAssets to register the QS assets (only dashboards are supported right now) that our CodePipeline pipeline will track across the different stages
+* QSAssetParameters where we can to store and configure the different parameter values that our tracked resources in QSTrackedAssets need and their values for each deployment stage (DEV/PRE/PRO). For example if one of our dashboards uses a RDS database the host/port combination would be different in each of the stages so we need to be able to configure these values for them.
+
 #### CloudFormation:
 
 Service that allows us to define our infrastructure as code. This service  will be configured  as an action provider for the Codepipeline deploy actions, deploying assets in the pre-production and production accounts in  an efficient and scalable manner (updating only resources as needed and detecting changes). Two cloudformation templates by stage will be deployed
@@ -93,6 +125,8 @@ Service that allows us to define our infrastructure as code. This service  will 
 * **DestAssets** creates an analysis from the QuickSight template defined in SourceAssets and all the required assets (datasets, data-sources, refresh schedules) needed for it, this will be deployed in the same environment as the stage deploying the assets (e.g. PRE stage will deploy DestAssets in pre account)
 
 To deploy with CodePipeline in the first stage (typically PRE) [StackSets will be used](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-StackSets.html), then for the subsequent stages [StackSet instances](https://docs.aws.amazon.com/codepipeline/latest/userguide/action-reference-StackSets.html#action-reference-StackInstances) (for the same StackSet used earlier) will be used. This is to follow the best practices as mentioned in the [Create a pipeline with AWS CloudFormation StackSets deployment actions tutorial](https://docs.aws.amazon.com/codepipeline/latest/userguide/tutorials-stackset-deployment.html).
+
+All these templates are parametrized so the same template could be used for all the environments (DEV/PRE/PRO), the parameter values for each stage are retrieved at pipeline execution runtime based on the values configured in DynamoDB tables, [refer to DynamoDB section](#dynamodb) for more details.
 
 #### Event Bridge:
 
@@ -124,7 +158,7 @@ Guidance assets will need to be deployed in two of the accounts, the first accou
 * Data-sources in the Dev account *should be using secrets* for RDS, RDBMs and Redshift sources. Secrets corresponding to each stage should exist in all the target accounts (they will be passed as CFN parameter). For more information take refer to [create an AWS Secrets Manager secret](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
 * (only when using `TEMPLATE` as deployment method) If data-sources in the dev account are using a [QuickSight VPC connection](https://docs.aws.amazon.com/quicksight/latest/user/working-with-aws-vpc.html), an equivalent VPC connection *should exist* on the other stages accounts, the id of the vpc connection will be passed as CFN parameter in the deployment action
 orgs_manage_org_support-all-features.html).
-* Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). At the moment the use of [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is not supported when using CloudFormation StackSet operations in CodePipeline.
+* Deployment account is the [organization management account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html). While using [delegated administrator accounts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-orgs-delegated-admin.html) is now supported when using CloudFormation StackSet operations in CodePipeline it doesn't fully support all the features of this solution such as deploying to individual accounts (instead of OUs) or using nested stacks.
 
 This guidance requires (at least) do deploy two CloudFormation stacks:
 
@@ -154,7 +188,7 @@ python deploy.py -h
 Below you can find an execution example for the script:
 
 ```
-python deploy.py --bucket <your_bucket_to_host_code_and_templates> --template_prefix templates --code_prefix code --bucket_region us-east-1 --deployment_account_id <your_deployment_account_id> --development_account_id <your_development_account_id>  --prepro_account_id <your_prepro_account_id>  --production_account_id <your_production_account_id>  --pipeline_name QSCICDPipeline --quicksight_user <valid_QS_user_name> --dashboard_id <dashboard_id_you_want_to_replicate>
+python deploy.py --bucket <your_bucket_to_host_code_and_templates> --bucket_account_id <account_id_owning_bucket> --template_prefix templates --code_prefix code --bucket_region us-east-1 --deployment_account_id <your_deployment_account_id> --development_account_id <your_development_account_id>  --prepro_account_id <your_prepro_account_id>  --production_account_id <your_production_account_id>  --pipeline_name QSCICDPipeline
 ```
 
 ### Deploying _Deployment account_ assets
@@ -185,11 +219,7 @@ Remember that you can use the deployment helper script to customize the template
 |PipelineS3BucketName|S3 Bucket to use for pipeline assets|String| qs-pipeline-bucket |
 |S3Region|Region where the S3 bucket will be hosted|String| us-east-1 |
 |QuickSightRegion|Region where QuickSight assets are hosted|String|  us-east-1 |
-|SrcQSAdminRegion|Admin region for your QS source account where your users are hosted|String|  us-east-1 |
-|DestQSAdminRegion|Admin region for your QS destination account where your users are hosted|String| us-east-1 |
 |AccountAdmin|IAM ARN that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption). Eg your role/user arn |String| User defined|
-|QSUser|QS Username in Account where the assets will be created|String| User defined|
-|Stage1Name|Name of the first stage in the pipeline, e.g. DEV|String| DEV |
 |Stage2Name|Name of the first stage in the pipeline, e.g. PRE|String| PRE |
 |Stage3Name|Name of the first stage in the pipeline, e.g. PRO|String| PRO |
 |AssumeRoleExtId|IAM external ID to be used in when assuming the IAM role in the development account. [Refer to this link](https://a.co/47mgPwV) for more details|String| qsdeppipeline |
@@ -215,24 +245,22 @@ The first stage account in our CI/CD pipeline will need to have the following as
 
  For convenience default values were provided for most of the parameters. Remember that you can use the deployment helper script to customize the template according to your environment and then easily deploy the stack. Refer to the [Preparing deployment using helper script section](#preparing-deployment-using-the-helper-script) for more details.
 
+ 
 |Parameter name|Description|Type|Default Value|
 | ---- | ---- | ---- |---- |
+|AssumeRoleExtId|Ext ID to be used in when assuming the IAM role in the development account|String| qsdeppipeline |
 |DeploymentAccountId|Account ID used for the deployment pipelines|String| User defined|
 |DeploymentS3Bucket|S3 Bucket to use for pipeline assets|String| qs-pipeline-bucket |
-|AssumeRoleExtId|Ext ID to be used in when assuming the IAM role in the development account|String| qsdeppipeline |
 |QuickSightRegion|Region where QuickSight assets are hosted|String|  us-east-1|
 |DeploymentS3Region|Region where the deployment (CI/CD) bucket resides|String| us-east-1|   
-|SourceQSUser|Source stage username to use to retrieve QS assets|String| User defined|
-|DestQSUser|Dest stage username to use to share the created QS assets with|String| User defined|
-|SourceCodeS3Bucket|S3 Bucket containing the code|String|  User defined|
-|SourceCodeKey| Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the guidance under source/lambda/qs_assets_CFN_synthesizer folder| String| User defined|
 |LayerCodeKey| Key within S3 Bucket that contains the zipped code for the lambda layer with external libraries. For your convenience you have the source code zipped in the guidance under source/lambda/layer folder| String| User defined|
-|StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String| DEV, PRE, PRO|
-|DashboardId| Dashboard ID in development you want to track changes for   | String|  User defined|
-|ReplicationMethod| Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)| String - AllowedValues are TEMPLATE/ASSETS_AS_BUNDLE| ASSETS_AS_BUNDLE|
-|RemapDS | Whether or not to remap the data sources connection properties in the dashboard datasets (when using templates) or supported properties when using Assets As Bundle (more info here https://a.co/jeHZkOr)| String (YES/NO)| YES|
 |PipelineName | Name of the Code Pipeline whose source assets this lambda will be contributing to | String| QSCICDPipeline|
-
+|RemapDS | Whether or not to remap the data sources connection properties in the dashboard datasets (when using templates) or supported properties when using Assets As Bundle (more info here https://a.co/jeHZkOr)| String (YES/NO)| YES|
+|GenerateNestedStacks | Whether or not to generate CFN nested stacks to be used by code pipeline CAUTION, this setting helps circumvent the potential issue of reaching the max template size (1MB) but can also break the resulting template, disable it if you experience any issues wit CFN during pipeline deployments| String (YES/NO)| YES|
+|ReplicationMethod| Method to use to replicate the dashboard (could be either TEMPLATE or ASSETS_AS_BUNDLE)| String - AllowedValues are TEMPLATE/ASSETS_AS_BUNDLE| ASSETS_AS_BUNDLE|
+|SourceCodeKey| Key within S3 Bucket that contains the zipped code. For your convenience you have the source code zipped in the guidance under source/lambda/qs_assets_CFN_synthesizer folder| String| User defined|
+|SourceCodeS3Bucket|S3 Bucket containing the code|String|  User defined|
+|StageNames| List of comma-separated names of the stages that your pipeline will be having (e.g. DEV, PRE, PRO)| String| DEV, PRE, PRO|
 
 
 ## Using the guidance
@@ -241,14 +269,15 @@ Once you have the guidance deployed you will be ready to start using your newly 
 
 In order to do so you just need to follow this procedure:
 
-1. [**In your Development account**] Go to your QuickSight console and in the [analyses section](https://us-east-1.quicksight.aws.amazon.com/sn/start/analyses) search for the available analysis, you should see an analysis named `Web and Social Media Analytics analysis` with an orange label that indicates that is a `SAMPLE`analysis
-1. [**In your Development account**] Open then analysis and publish it as a dashboard, then note the ID of the dashboard (that ou can see at the end of the URL of the page as you will need it in later steps)
-1. [**In your Development account**] Open the synthesizer Lambda function created by the development account Cloudformation Stack (you can easily get a link to it from your Cloud Formation stack using the resources tab). Navigate to the configuration tab in lambda and locate the [Environment Variables section](https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html#configuration-envvars-config). Now set the dasboard ID you got from the previous step as value for `DASHBOARD_ID`
+1. [**In your Development account**] Go to your QuickSight console and in the [analysis section](https://us-east-1.quicksight.aws.amazon.com/sn/start/analyses) search for the available analysis, you should see an analysis named `Web and Social Media Analytics analysis` with an orange label that indicates that is a `SAMPLE`analysis.).
+1. [**In your Development account**] Open then analysis and publish it as a dashboard, name it `Test Pipeline Dashboard`, then note the ID of the dashboard (that ou can see at the end of the URL https://<region>.quicksight.aws.amazon.com/sn/dashboards/<dashboard_id>) as you will need it in later steps.
 1. Ensure that the accounts from subsequent stages are subscribed to QuickSight Enterprise edition.
-1. Ensure the AWSCloudFormationStackSetExecutionRole exists in all the stages AWS Accounts. You can [check this by opening this page in IAM](https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/roles/details/AWSCloudFormationStackSetExecutionRole?section=permissions) **in each of the deployment accounts**.
-1. [**In your Development account**] Choose the desired deployment method `TEMPLATE` or `ASSETS_AS_BUNDLE`. This is controlled via the *REPLICATION_METHOD* Lambda environment variable (set to `ASSETS_AS_BUNDLE` by default)
-1. [**In your Development account**] Manually execute the lambda function present in the development account making sure you change the *MODE* to `INITIALIZE`. 
-1. [**In your Development account**] This will make the lambda function to scan the resources that need to be synthesized in the source account and will create CloudFormation parameter configuration files in the deployment S3 bucket (a pair of files for each stage will be created, one for source assets and another one for destination assets). The parameter file for the Web and Social Media Analytics analysis dashboard will look like this:
+1. Ensure the AWSCloudFormationStackSetExecutionRole exists in all the stages AWS Accounts. You can [check this by opening this page in IAM](https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/roles/details/AWSCloudFormationStackSetExecutionRole?section=permissions) **in each of the stage accounts (DEV/PRE/PRO)**.
+1. [**In your Development account**] Choose the desired deployment method `TEMPLATE` or `ASSETS_AS_BUNDLE`. This is controlled via the *REPLICATION_METHOD* Lambda environment variable (it is set to `ASSETS_AS_BUNDLE` by default)
+1. [**In your Deployment account**] Navigate to DynamoDB console and open the [tables section](https://us-east-1.console.aws.amazon.com/dynamodbv2/home?region=us-east-1#tables). Here you should see two tables named QSAssetParameters-<PipelineName> and QSTrackedAssets-<PipelineName> where PipelineName correspond to the pipeline name you set on the [deployment template parameters](#deploying-deployment-account-assets).
+1. [**In your Deployment account**] Click on QSTrackedAssets-<PipelineName> table and under the `Actions` menu click on `Create Item`. create an item with the following fields; AssetId which should be the dashboard ID you noted down in step 2. and AssetType set to `DASHBOARD`
+1. [**In your Development account**] Manually execute the lambda function present in the development account making sure the *MODE* variable is set to `INITIALIZE` (this should be already set by default). 
+1. [**In your Development account**] The lambda function will scan the resources that need to be synthesized in the source account based on the items found on the QSTrackedAssets-<PipelineName>. The lambda function will initialize the QSAssetParameters-<PipelineName> DynamoDB table with four items (two per each stage PRE and PRO in our default configuration). Each stage will have two items, one with AssetType set to `source` (that will be empty if you use `ASSETS_AS_BUNDLE` as ReplicationMethod) and another one with AssetType set to `dest`  which correspond to the assets that CodePipeline will deploy via CloudFormation templates in your stage accounts (DEV/PRE/PRO). Each record will contain two additional attributes `ParameterDefinition` and `ParameterDefinitionHelp`. The `ParameterDefinition` is JSON array containing ParameterKey and ParameterValue value pairs for each of the parameters needed by the QS assets configured in QSTrackedAssets-<PipelineName>. A detailed explanation of these parameters could be found on the `ParameterDefinitionHelp` attribute. For our example with the `Web and Social Media Analytics` dashboard the `ParameterDefinition` attribute in the QSAssetParameters-<PipelineName> DynamoDB should look similar to the following
 
 ```json
 [
@@ -270,7 +299,7 @@ In order to do so you just need to follow this procedure:
   }
 ]
 ```
-6. [**In your Deployment account**] Locate the generated files in S3 (the lambda function will output the location of these files upon execution) and edit the contents to parametrize the deployment on the subsequent stages (typically PRE and PRO). If you have set the *REMAP_DS* environment variable to `YES` (default), the lambda function you will also need to define the data-source configuration parameters for each stage. for example, for the Web and Social Media Analytics sample dataset the parameter values should be like this (notice that the parameter keys could be different):
+6. [**In your Deployment account**] Now edit the records corresponding to AssetType `dest` for each of the StageNames (PRE and PRO) setting the `ParameterDefinition` as needed, for the example of Web and Social Media Analytics dashboard it would look like the following (notice that the parameter keys could be different):
 
 ```json
 [
@@ -292,15 +321,16 @@ In order to do so you just need to follow this procedure:
   }
 ]
 ```
-7. [*In your Development account*] Ini case you are not using the Web and Social Media Analytics sample analysis and your analysis has different dataset you will need to execute the [describe-data-source](https://docs.aws.amazon.com/cli/latest/reference/quicksight/describe-data-source.html) operation for each of the data sources used in your dashboard to understand the resources they use (e.g. S3 buckets, RDS databases, Redshift clusters ...) and then determine which values should you use in each of the subsequent stage environments (PRE and PRO).
-7. [*In your Development account*] Once you have edited the parameter files for each stage upload the edited files to the same location in S3 and then execute the lambda function changing the environment variable *MODE* to `DEPLOY` or just create a new version of the dashboard configured in the pipeline. This will trigger the Lambda that will create the [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) according to the selected *REPLICATION_METHOD* and will upload them to the deployment S3 bucket monitored by EventBridge that will trigger the execution of the pipeline
-7. [*In your Deployment account*] Check the pipeline execution and the deployment in your second stage (typically PRE), once the deployment is complete navigate to the quicksight  console in your region to see the deployed analysis.
-7. [*In your Deployment account*] Once you have validated the analysis in the first stage (PRE) you may go back to the pipeline and decide whether or not you want to approve the change so it reaches the second stage (typically PRO)
+7. [**In your Development account**] If you are not using the Web and Social Media Analytics sample analysis and your analysis has different dataset you will need to execute the [describe-data-source](https://docs.aws.amazon.com/cli/latest/reference/quicksight/describe-data-source.html) operation for each of the data sources used in your dashboard to understand the resources they use (e.g. S3 buckets, RDS databases, Redshift clusters ...) and then determine which values should you use in each of the subsequent stage environments (PRE and PRO). You can also refer to the `ParameterDefinitionHelp` attribute in the QSAssetParameters-<PipelineName> DynamoDB table to get more insights from each of the parameters and the origin QuickSight asset that uses it.
+7. [**In your Development account**] Once you have edited the `ParameterDefinition` attributes for each stage in the QSAssetParameters-<PipelineName> DynamoDB edit your Lambda function environment variable *MODE* to `DEPLOY`. This will change the Lambda behavior to create the [CloudFormation artifacts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/continuous-delivery-codepipeline-cfn-artifacts.html) according to the selected *REPLICATION_METHOD* and upload them to the deployment S3 bucket monitored by EventBridge that will trigger the execution of the pipeline.
+7. [**In your Development account**] Access to QuickSight and in the [analysis section](https://us-east-1.quicksight.aws.amazon.com/sn/start/analyses) search for the `Web and Social Media Analytics analysis` analysis, make a change on it (e.g. add a KPI visual) and then and publish it as a dashboard replacing the dashboard you created in step 2. (`Test Pipeline Dashboard`). As we have an event bridge rule configured to run our synthesizer lambda function each time a dashboard version is created the previous step will trigger the complete pipeline.
+7. [**In your Deployment account**] Check the pipeline execution and the deployment in your second stage (typically PRE), once the deployment is complete navigate to the quicksight  console in your region to see the deployed analysis.
+7. [**In your Deployment account**] Once you have validated the analysis in the first stage (PRE) you may go back to the pipeline and decide whether or not you want to approve the change so it reaches the second stage (typically PRO)
 7. After changes have been approved you should be able to see the deployment started that will progress your changes to PRO
 
 ## Guidance limitations
 
-* At the moment the Pipeline supports the continuous deployment of **one single dashboard** if you want to deploy multiple dashboards you will need to create different pipelines and synthesizer lambda functions by creating multiple instances of the Deployment account and First account templates.
+* At the moment the Pipeline supports the continuous deployment of QuickSight DASHBOARDS, ANALYSIS or Q_TOPICS are not supported.
 * When using `TEMPLATE` as replication method, supported datasources are RDS, Redshift, S3 and Athena
 * When using `ASSETS_AS_BUNDLE` as replication method, all the datasources are supported excepting the ones [listed here](https://docs.aws.amazon.com/quicksight/latest/developerguide/asset-bundle-ops.html). Also uploaded file datasources are not supported.
 
@@ -338,19 +368,11 @@ This is expected as by default, a pipeline starts automatically when it is creat
 
 ### Problem
 
-When executing my pipeline I get the following error: Datasource XXXX (ID YYY ) is an RDS datasource and it is not configured with a secret, cannot proceed
+When executing my pipeline I get the following error: Datasource XXXX (ID YYY) is an RDS datasource and it is not configured with a secret, cannot proceed
 
 ### Solution
 
 When you use RDBMs datasources in QuickSight (e.g. RDS, Redshift) they require you to provide a user and a password for the connection. QuickSight allows you to define the user and password directly on the QuickSight console when creating your dataset but for security reasons the user and the password cannot be retrieved programmatically. This prevents the guidance automation to replicate your assets across environments. In order to overcome this QuickSight integrates with [Secrets Manager](https://docs.aws.amazon.com/quicksight/latest/user/secrets-manager-integration.html) to securely store and manage access to your database credentials. As a requisite you need to store your database credentials as secrets in secret manager ([see requisite 5. in the list of pre-requisites](#pre-requisites-and-assumptions)).
-
-### Problem
-
-When executing changes in the pipeline not all the changes are deployed in order, if I summit a new change while the pipeline is still deploying the previous one (or pending approval to get to the last stage) a newer change can overtake a previous one.
-
-### Solution 
-
-This is expected when Code Pipeline works in SUPERSEDED mode, where the pipelines is able to process multiple executions at the same time. Each execution is run through the pipeline separately. The pipeline processes each execution in order and might supersede an earlier execution with a later one. The following rules are used to process executions in a pipeline for SUPERSEDED mode, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions). If you want your pipeline to lock stages when an execution is being processed so waiting executions do not overtake executions that have already started you might want to take a look to the [QUEUED mode here.](https://docs.aws.amazon.com/codepipeline/latest/userguide/concepts-how-it-works.html#concepts-how-it-works-executions-queued). You can change the pipeline mode according to your needs, [more info here](https://docs.aws.amazon.com/codepipeline/latest/userguide/execution-modes.html).
 
 ### Problem
 
@@ -360,7 +382,7 @@ When executing the synthesizer lambda function it raises an error stating ```An 
 
 Ensure the dashboard specified on the `DASHBOARD_ID` Lambda environment variable exists in the development account (a.k.a first stage account)
 
-## Security
+## Contributing
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
 

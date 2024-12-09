@@ -3,7 +3,7 @@ Description: 'Automated deployment of QuickSight Assets.'
 
 Parameters:
   SourceAccountID:
-    Description: Account ID where the QuickSight template resides (source account)
+    Description: Account ID where the QuickSight template resides, this the previous stage account (e.g. If setting parameters for PRE stage it should be the AWS Account used for Development workloads)
     Type: String
   QSUser:
     Description: QS Username in Account where the assets will be created

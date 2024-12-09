@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Automated deployment of QuickSight Assets.
+Parameters:
+  DestAccountID:
+    Description: Account ID that needs to get access to the template, this the current stage account (e.g. If setting parameters for PRE stage it should be the AWS Account used for Preproduction workloads).
+    Type: String
+  QSUser:
+    Description: QS Username in Account ID where to own the template that will be created.
+    Type: String
+  SrcQSAdminRegion:
+    Description: "Admin region for your QS source account where your users are hosted."
+    Type: String      

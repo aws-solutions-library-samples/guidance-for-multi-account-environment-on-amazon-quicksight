@@ -1,0 +1,23 @@
+Type: AWS::QuickSight::Theme
+Properties:
+  AwsAccountId: '<fill_me>'
+  BaseThemeId: '<fill_me>'
+  Configuration:     
+  Name: '<fill_me>'
+  Permissions: 
+    - Principal: 
+        Fn::Sub: 'arn:aws:quicksight:${DstQSAdminRegion}:${AWS::AccountId}:user/default/${QSUser}'          
+      Actions:
+        - quicksight:UpdateThemeAlias
+        - quicksight:ListThemeVersions
+        - quicksight:DescribeThemeAlias        
+        - quicksight:UpdateThemePermissions
+        - quicksight:DeleteThemeAlias
+        - quicksight:DeleteTheme
+        - quicksight:ListThemeAliases
+        - quicksight:DescribeTheme
+        - quicksight:CreateThemeAlias
+        - quicksight:UpdateTheme
+        - quicksight:DescribeThemePermissions
+  ThemeId: '<fill_me>'
+  VersionDescription: '<fill_me>'

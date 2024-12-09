@@ -1,0 +1,31 @@
+Type: 'AWS::QuickSight::Template'
+Properties:
+  TemplateId: ''
+  Name: ''
+  AwsAccountId: 
+    Ref: 'AWS::AccountId'
+  SourceEntity:
+    SourceAnalysis:
+      Arn:
+        Fn::Sub: 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:analysis/{analysis_id}'              
+      DataSetReferences:
+      - DataSetArn: 
+            Fn::Sub: 'arn:aws:quicksight:${AWS::Region}:${AWS::AccountId}:dataset/{dataset_id}'                  
+        DataSetPlaceholder: ''
+                    
+  Permissions:
+    - Actions:
+      - quicksight:DescribeTemplate
+      - quicksight:UpdateTemplate
+      - quicksight:DeleteTemplate
+      - quicksight:UpdateTemplateAlias
+      - quicksight:DescribeTemplatePermissions
+      - quicksight:UpdateTemplatePermissions
+      Principal: 
+        Fn::Sub: 'arn:aws:quicksight:${SrcQSAdminRegion}:${AWS::AccountId}:user/default/${QSUser}'
+    - Actions:
+      - quicksight:DescribeTemplate
+      - quicksight:DescribeTemplateAlias
+      Principal: 
+        Fn::Sub: 'arn:aws:iam::${DestAccountID}:root'              
+  VersionDescription: Initial version - Copied over from AWS account.

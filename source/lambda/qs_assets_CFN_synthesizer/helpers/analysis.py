@@ -1,6 +1,7 @@
 class QSAnalysisDef:
     name =''
     id = ''
+    arn = ''
     CFNId = ''
     datasets = {}    
     QSUser = ''
@@ -9,8 +10,9 @@ class QSAnalysisDef:
     AccountId = ''
     TemplateId = ''
     PipelineName = ''
+    AssociatedDashboardId = ''
     
-    def __init__(self, name: str, arn: str, QSUser:str, QSRegion:str, QSAdminRegion:str, AccountId:str, TemplateId:str, PipelineName:str):
+    def __init__(self, name: str, arn: str, QSUser:str, QSRegion:str, QSAdminRegion:str, AccountId:str,  PipelineName:str, AssociatedDashboardId: str):
         self.name = name
         self.arn = arn
         self.id = arn.split('analysis/')[-1]
@@ -19,8 +21,9 @@ class QSAnalysisDef:
         self.QSRegion = QSRegion
         self.QSAdminRegion = QSAdminRegion
         self.AccountId = AccountId
-        self.TemplateId = TemplateId
+        self.TemplateId = '{analysis_name}-template'.format(analysis_name=name.replace(' ', '-'))
         self.PipelineName = PipelineName
+        self.AssociatedDashboardId = AssociatedDashboardId
         
 
     def getDependingDatasets(self):

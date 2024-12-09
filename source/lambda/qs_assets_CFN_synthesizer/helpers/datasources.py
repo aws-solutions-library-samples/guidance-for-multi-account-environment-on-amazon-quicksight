@@ -57,6 +57,7 @@ class QSRDSDatasourceDef(QSDataSourceDef):
     type = ''
     vpcConnectionArn = ''
     secretArn = ''
+    parameters = {}
 
     def __init__(self, name: str, arn: str, parameters: object, type: SourceType,  index: int):
         if 'VpcConnectionArn' in parameters:
@@ -67,6 +68,7 @@ class QSRDSDatasourceDef(QSDataSourceDef):
             self.database = parameters['Database']
         if 'SecretArn' in parameters:
             self.secretArn = parameters['SecretArn']
+        self.parameters = parameters
         self.type = type
         super().__init__(name, arn, index)
         
