@@ -1,5 +1,6 @@
 ### vsCode ###
 .vscode
+**/**.code-workspace
 
 ### macOS ###
 # General
@@ -17,6 +18,7 @@
 
 **/node_modules
 **/dist
+**/__pycache__
 **/build
 **/.DS_Store
 **/.angular
@@ -25,3 +27,4 @@ cdk.out
 **/data/**.csv
 
 .env
+workspace/

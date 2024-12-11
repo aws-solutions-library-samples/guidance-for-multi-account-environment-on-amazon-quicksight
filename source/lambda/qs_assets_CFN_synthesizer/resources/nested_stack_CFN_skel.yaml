@@ -1,0 +1,8 @@
+Type: 'AWS::CloudFormation::Stack'
+DeletionPolicy: Retain
+Properties:
+  TemplateURL: >-
+    https://s3.amazonaws.com/cloudformation-templates-us-east-2/EC2ChooseAMI.template
+  Parameters:
+    ParamValue: value
+    KeyName: mykey

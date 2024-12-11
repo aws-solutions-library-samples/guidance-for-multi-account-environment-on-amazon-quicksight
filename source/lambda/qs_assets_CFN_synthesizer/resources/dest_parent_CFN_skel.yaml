@@ -1,0 +1,22 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Automated deployment of QuickSight Assets.'
+
+Resources:
+  datasourceStack:
+    Type: 'AWS::CloudFormation::Stack'
+    DeletionPolicy: Retain
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation-templates-sample/datasource.yaml
+      Parameters:
+        ParamValue: value
+        KeyName: mykey
+  datasetStack:
+    Type: 'AWS::CloudFormation::Stack'
+    DeletionPolicy: Retain
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation-templates-sample/dataset.yaml
+      Parameters:
+        ParamValue: value
+        KeyName: mykey

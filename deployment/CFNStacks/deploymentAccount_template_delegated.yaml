@@ -27,10 +27,25 @@ Parameters:
     Description: Region where QuickSight assets are hosted
     Type: String
     Default: "us-east-1"
+  SrcQSAdminRegion:
+    Description: Admin region for your QS source account where your users are hosted
+    Type: String
+    Default: "us-east-1"
+  DestQSAdminRegion:
+    Description: Admin region for your QS destination account where your users are hosted
+    Type: String
+    Default: "us-east-1"
+  QSUser:
+    Description: QS Username in Account where the assets will be created
+    Type: String    
   AccountAdminARN:
     Description: IAM ARN that will be responsible for administering the Account (it will be able to manage the created KMS key for encryption). Eg your role/user arn
     Type: String
     Default: role/Administrator
+  Stage1Name:
+    Description: Name of the first stage in the pipeline, e.g. DEV
+    Type: String
+    Default: DEV
   Stage2Name:
     Description: Name of the first stage in the pipeline, e.g. PRE
     Type: String
@@ -272,13 +287,13 @@ Resources:
                 Provider: CloudFormationStackSet
                 Version: "1"
               Configuration:
+                DeploymentTargets: ou-my7p-vzbg144t
+                CallAs: DELEGATED_ADMIN                
+                PermissionModel: SELF_MANAGED
                 AdministrationRoleArn: 
                   Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
-                DeploymentTargets: 
-                  Ref: DevelopmentAccountId
                 ExecutionRoleName: 
-                  Ref: ExecutionRoleName               
-                PermissionModel: SELF_MANAGED
+                  Ref: ExecutionRoleName
                 Regions: 
                   Ref: QuickSightRegion
                 StackSetName: 
@@ -300,14 +315,14 @@ Resources:
                 Owner: AWS
                 Provider: CloudFormationStackSet
                 Version: "1"
-              Configuration:
+              Configuration:                
+                DeploymentTargets: ou-my7p-k3a361d9
+                PermissionModel: SELF_MANAGED
                 AdministrationRoleArn: 
                   Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/${AdministrationRoleName}
-                DeploymentTargets: 
-                  Ref: PreProdAccountId
                 ExecutionRoleName: 
-                  Ref: ExecutionRoleName                
-                PermissionModel: SELF_MANAGED
+                  Ref: ExecutionRoleName
+                CallAs: DELEGATED_ADMIN                
                 Regions: 
                   Ref: QuickSightRegion
                 StackSetName: 
@@ -347,12 +362,12 @@ Resources:
                 Provider: CloudFormationStackInstances
                 Version: "1"
               Configuration:
-                DeploymentTargets: 
-                  Ref: PreProdAccountId
+                DeploymentTargets: ou-my7p-k3a361d9
                 ParameterOverrides: 
                   Fn::Sub: SourceAssetsArtifact::source_cfn_template_parameters_${Stage3Name}.txt
                 Regions: 
                   Ref: QuickSightRegion
+                CallAs: DELEGATED_ADMIN
                 StackSetName: 
                   Fn::Sub: ${PipelineName}-QSSourceAssets
               InputArtifacts:
@@ -368,10 +383,10 @@ Resources:
                 Provider: CloudFormationStackInstances
                 Version: "1"
               Configuration:
-                DeploymentTargets: 
-                  Ref: ProdAccountId
+                DeploymentTargets: ou-my7p-i7nnlz6i
                 ParameterOverrides: 
-                  Fn::Sub: DestAssetsArtifact::dest_cfn_template_parameters_${Stage3Name}.txt                  
+                  Fn::Sub: DestAssetsArtifact::dest_cfn_template_parameters_${Stage3Name}.txt
+                CallAs: DELEGATED_ADMIN
                 Regions: 
                   Ref: QuickSightRegion
                 StackSetName: 
@@ -456,6 +471,24 @@ Resources:
         Statement:
           - Action:
             - iam:PassRole
+            - iam:GetAccountAuthorizationDetails
+            - organizations:ListAccounts
+            - organizations:DescribeAccount
+            - organizations:DescribeOrganization
+            - organizations:ListPoliciesForTarget
+            - organizations:ListDelegatedAdministrators
+            - organizations:ListDelegatedServicesForAccount
+            Resource: '*'
+            Effect: Allow
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - cloudformation.amazonaws.com
+                  - elasticbeanstalk.amazonaws.com
+                  - ec2.amazonaws.com
+                  - ecs-tasks.amazonaws.com
+          - Action:
+            - iam:PassRole
             Condition:
               StringEqualsIfExists:
                 iam:PassedToService:
@@ -487,17 +520,21 @@ Resources:
             Resource:  
               Fn::Sub: "arn:aws:s3:::${PipelineS3BucketName}"
           - Action:
-            - cloudformation:CreateStackSet
-            - cloudformation:CreateStackInstances
-            - cloudformation:GetTemplateSummary
-            - cloudformation:DescribeStackSet
-            - cloudformation:ListStackInstances                
-            - cloudformation:UpdateStackSet
-            - cloudformation:DescribeStackSetOperation
+            - cloudformation:CreateStack
+            - cloudformation:DeleteStack
+            - cloudformation:DescribeStacks
+            - cloudformation:UpdateStack
+            - cloudformation:CreateChangeSet
+            - cloudformation:DeleteChangeSet
+            - cloudformation:DescribeChangeSet
+            - cloudformation:ExecuteChangeSet
+            - cloudformation:SetStackPolicy
+            - cloudformation:ValidateTemplate
+            - cloudformation:DescribeStackSet 
+            - cloudformation:ListStackInstances 
             Effect: Allow
             Resource:  
-              - Fn::Sub: "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSSourceAssets:*"
-              - Fn::Sub: "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stackset/${PipelineName}-QSDestAssets:*"              
+              - "*"
       PolicyName: QSCICDPipelinePolicy
       RoleName: 
         Ref: CodePipelineRole

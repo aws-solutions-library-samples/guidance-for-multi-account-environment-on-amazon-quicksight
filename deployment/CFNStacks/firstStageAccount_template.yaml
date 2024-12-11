@@ -14,9 +14,6 @@ Parameters:
     Description: Ext ID to be used in when assuming the IAM role in the development
       account
     Type: String
-  DashboardId:
-    Description: Dashboard ID in development you want to track changes for
-    Type: String
   DeploymentAccountId:
     AllowedPattern: ^[0-9]{12}
     Description: Account ID used for the deployment pipelines
@@ -29,10 +26,7 @@ Parameters:
   DeploymentS3Region:
     Default: us-east-1
     Description: Region where the deployment (CI/CD) bucket resides
-    Type: String
-  DestQSUser:
-    Description: Dest stage username to use to share the created QS assets with
-    Type: String
+    Type: String  
   LayerCodeKey:
     AllowedPattern: ^[0-9a-zA-Z\/\-_]+\.zip
     Description: Key within S3 Bucket that contains the zipped code for the lambda
@@ -44,10 +38,6 @@ Parameters:
     Description: Name of the Code Pipeline whose source assets this lambda will be
       contributing to
     Type: String
-  QuickSightRegion:
-    Default: us-east-1
-    Description: Region where QuickSight assets are hosted
-    Type: String
   RemapDS:
     AllowedValues:
     - true
@@ -56,6 +46,15 @@ Parameters:
     Description: Whether or not to remap the data sources connection properties in
       the dashboard datasets (when using templates) or supported properties when using
       Assets As Bundle (more info here https://a.co/jeHZkOr)
+    Type: String
+  GenerateNestedStacks:
+    AllowedValues:
+    - true
+    - false
+    Default: true
+    Description: Whether or not to generate CFN nested stacks to be used by code pipeline
+      CAUTION, this setting helps circumvent the potential issue of reaching the max template size (1MB)
+      but can also break the resulting template, disable it if you experience any issues wit CFN during pipeline deployments
     Type: String
   ReplicationMethod:
     AllowedValues:
@@ -74,9 +73,6 @@ Parameters:
   SourceCodeS3Bucket:
     AllowedPattern: ^[0-9a-z\.-]{3,63}
     Description: S3 Bucket containing the code
-    Type: String
-  SourceQSUser:
-    Description: Source stage username to use to retrieve QS assets
     Type: String
   StageNames:
     Default: DEV, PRE, PRO
@@ -98,6 +94,8 @@ Resources:
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/AWSLambdaExecute
       - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      - arn:aws:iam::aws:policy/AWSQuickSightAssetBundleImportPolicy
+      - arn:aws:iam::aws:policy/AWSQuickSightAssetBundleExportPolicy 
       Policies:
       - PolicyDocument:
           Statement:
@@ -110,13 +108,6 @@ Resources:
             Resource:
             - Fn::Sub: arn:aws:quicksight:*:${AWS::AccountId}:dataset/*
             Sid: 1
-          - Action:
-            - quicksight:StartAssetBundleExportJob
-            - quicksight:DescribeAssetBundleExportJob
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:aws:quicksight:*:${AWS::AccountId}:asset-bundle-export-job/*
-            Sid: 2
           - Action: sts:AssumeRole
             Effect: Allow
             Resource:
@@ -186,28 +177,24 @@ Resources:
       Environment:
         Variables:
           ASSUME_ROLE_EXT_ID:
-            Ref: AssumeRoleExtId
-          DASHBOARD_ID:
-            Ref: DashboardId
+            Ref: AssumeRoleExtId          
           DEPLOYMENT_ACCOUNT_ID:
             Ref: DeploymentAccountId
           DEPLOYMENT_S3_BUCKET:
             Ref: DeploymentS3Bucket
           DEPLOYMENT_S3_REGION:
-            Ref: DeploymentS3Region
-          DEST_QS_USER:
-            Ref: DestQSUser
+            Ref: DeploymentS3Region          
           MODE: INITIALIZE
           PIPELINE_NAME:
             Ref: PipelineName
           REMAP_DS:
             Ref: RemapDS
+          GENERATE_NESTED_STACKS:
+            Ref: GenerateNestedStacks
           REPLICATION_METHOD:
             Ref: ReplicationMethod
           SOURCE_AWS_ACCOUNT_ID:
-            Ref: AWS::AccountId
-          SOURCE_QS_USER:
-            Ref: SourceQSUser
+            Ref: AWS::AccountId                      
           STAGES_NAMES:
             Ref: StageNames
       FunctionName:

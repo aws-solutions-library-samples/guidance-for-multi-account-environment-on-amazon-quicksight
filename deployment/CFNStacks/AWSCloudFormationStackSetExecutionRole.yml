@@ -16,16 +16,17 @@ Resources:
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Ref ExecutionRoleName
+      RoleName: 
+        Ref: ExecutionRoleName
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
           - Effect: Allow
             Principal:
               AWS:
-                - !Ref AdministratorAccountId
+                - Ref: AdministratorAccountId
             Action:
               - sts:AssumeRole
       Path: /
       ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+        - Fn::Sub: arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
